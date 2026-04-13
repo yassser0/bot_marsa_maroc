@@ -80,6 +80,26 @@ async def chat_with_bot(req: MessageRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur de communication API: {str(e)}")
 
+@app.post("/simulate-ai")
+async def simulate_ai(payload: dict = Body(...)):
+    """Simule une réponse d'IA au format standard (OpenAI compatible)"""
+    user_message = "..."
+    # On essaie d'extraire le message envoyé pour l'inclure dans la réponse
+    messages = payload.get("messages", [])
+    if messages:
+        user_message = messages[-1].get("content", "...")
+    
+    return {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": f"[SIMULATION IA] J'ai bien reçu votre message : '{user_message}'. Je suis configuré pour répondre via l'endpoint de test de Marsa Maroc."
+                }
+            }
+        ]
+    }
+
 @app.get("/")
 def read_root():
     return {"message": "SaaS Bot Builder API (MongoDB Mode) en ligne."}
