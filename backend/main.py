@@ -52,6 +52,11 @@ async def get_bot_messages(bot_id: str):
         messages.append(message_helper(msg))
     return messages
 
+@app.delete("/bots/{bot_id}/messages")
+async def delete_bot_messages(bot_id: str):
+    await messages_collection.delete_many({"bot_id": bot_id})
+    return {"message": "Historique supprimé avec succès"}
+
 @app.post("/bots/")
 async def create_bot(bot: BotCreate):
     new_bot = bot.dict()

@@ -220,6 +220,16 @@ const ChatView = ({ bot, onBack }) => {
     loadHistory();
   }, [bot.id, bot.name]);
 
+  const clearChat = async () => {
+    if (!window.confirm("Voulez-vous vraiment effacer tout l'historique de ce bot ?")) return;
+    try {
+      await axios.delete(`${API_BASE_URL}/bots/${bot.id}/messages`);
+      setMessages([{ role: 'bot', content: `Historique effacé. Je suis prêt pour une nouvelle discussion !` }]);
+    } catch (error) {
+      alert("Erreur lors de la suppression de l'historique.");
+    }
+  };
+
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
     
@@ -255,9 +265,19 @@ const ChatView = ({ bot, onBack }) => {
             <span style={{ fontSize: '12px', color: 'var(--success)' }}>Connecté à {bot.url}</span>
           </div>
         </div>
-        <button className="btn-outline" onClick={onBack}>
-          <X size={16} /> Fermer
-        </button>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button 
+            className="btn-outline" 
+            style={{ color: 'var(--danger)', borderColor: 'rgba(239, 68, 68, 0.2)' }}
+            onClick={clearChat}
+            title="Effacer la conversation"
+          >
+            <Trash2 size={16} /> Effacer
+          </button>
+          <button className="btn-outline" onClick={onBack}>
+            <X size={16} /> Fermer
+          </button>
+        </div>
       </div>
       
       <div style={{ flex: 1, padding: '24px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px' }}>
