@@ -283,6 +283,53 @@ const ChatView = ({ bot, onBack }) => {
   );
 };
 
+// Settings View Component
+const SettingsView = () => {
+  return (
+    <div className="animate-fade-in">
+      <div style={{ marginBottom: '32px' }}>
+        <h2>Paramètres du Système</h2>
+        <p style={{ color: 'var(--text-muted)' }}>Configurez les options globales de votre plateforme de bots.</p>
+      </div>
+
+      <div className="glass-panel" style={{ padding: '32px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+        <section>
+          <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Server size={18} color="var(--accent-primary)" /> Configuration Backend
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <label style={{ fontSize: '14px', color: 'var(--text-muted)' }}>URL de l'API de base</label>
+            <input 
+              type="text" 
+              className="glass-input" 
+              value="http://127.0.0.1:8000" 
+              readOnly 
+              style={{ opacity: 0.7, cursor: 'not-allowed' }}
+            />
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>L'URL est actuellement gérée par les variables d'environnement.</span>
+          </div>
+        </section>
+
+        <section style={{ borderTop: '1px solid var(--border-color)', paddingTop: '24px' }}>
+          <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Cpu size={18} color="var(--accent-primary)" /> État du Système
+          </h3>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+            <div className="glass-panel" style={{ padding: '16px', background: 'rgba(255,255,255,0.02)' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Version Frontend</span>
+              <p style={{ margin: '4px 0 0 0', fontWeight: 'bold' }}>1.2.0-stable</p>
+            </div>
+            <div className="glass-panel" style={{ padding: '16px', background: 'rgba(255,255,255,0.02)' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Mode de Données</span>
+              <p style={{ margin: '4px 0 0 0', fontWeight: 'bold', color: 'var(--success)' }}>MongoDB Connected</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+};
+
 // Main App Component
 function App() {
   const [currentView, setCurrentView] = useState('list');
@@ -339,12 +386,26 @@ function App() {
         <nav style={{ padding: '24px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <button 
             className="btn-outline" 
-            style={{ width: '100%', justifyContent: 'flex-start', borderColor: currentView === 'list' ? 'var(--accent-primary)' : 'transparent' }}
+            style={{ 
+              width: '100%', 
+              justifyContent: 'flex-start', 
+              borderColor: currentView === 'list' ? 'var(--accent-primary)' : 'transparent',
+              background: currentView === 'list' ? 'rgba(59, 130, 246, 0.1)' : 'transparent'
+            }}
             onClick={() => setCurrentView('list')}
           >
             <Server size={18} /> Mes Bots
           </button>
-          <button className="btn-outline" style={{ width: '100%', justifyContent: 'flex-start' }}>
+          <button 
+            className="btn-outline" 
+            style={{ 
+              width: '100%', 
+              justifyContent: 'flex-start',
+              borderColor: currentView === 'settings' ? 'var(--accent-primary)' : 'transparent',
+              background: currentView === 'settings' ? 'rgba(59, 130, 246, 0.1)' : 'transparent'
+            }}
+            onClick={() => setCurrentView('settings')}
+          >
             <Settings size={18} /> Paramètres
           </button>
         </nav>
@@ -373,6 +434,10 @@ function App() {
             bot={activeBot} 
             onBack={() => setCurrentView('list')} 
           />
+        )}
+
+        {currentView === 'settings' && (
+          <SettingsView />
         )}
       </main>
     </div>
