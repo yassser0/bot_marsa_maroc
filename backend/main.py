@@ -1,24 +1,21 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import httpx
+from bson import ObjectId
+from database import bot_collection, bot_helper
 
-app = FastAPI(title="Bot Builder API", version="1.0.0")
+app = FastAPI(title="Bot Builder API", version="1.1.0")
 
 # Allow requests from the React Frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # For dev purposes
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# In-memory database for quick start (To be replaced with SQLite/SQLAlchemy)
-bots_db = [
-    {"id": 1, "name": "Maroc-Assistant", "url": "mock_api", "api_key": "xxx", "prompt": "Tu es l'assistant de Marsa Maroc."}
-]
 
 class BotCreate(BaseModel):
     name: str
@@ -27,46 +24,47 @@ class BotCreate(BaseModel):
     prompt: Optional[str] = None
 
 class MessageRequest(BaseModel):
-    bot_id: int
+    bot_id: str  # Updated to str for MongoDB ObjectId
     message: str
 
 @app.get("/bots")
-def get_bots():
-    return bots_db
+async def get_bots():
+    bots = []
+    async for bot in bot_collection.find():
+        bots.append(bot_helper(bot))
+    return bots
 
 @app.post("/bots/")
-def create_bot(bot: BotCreate):
-    new_bot = {
-        "id": len(bots_db) + 1,
-        "name": bot.name,
-        "url": bot.url,
-        "api_key": bot.api_key,
-        "prompt": bot.prompt
-    }
-    bots_db.append(new_bot)
-    return new_bot
+async def create_bot(bot: BotCreate):
+    new_bot = bot.dict()
+    result = await bot_collection.insert_one(new_bot)
+    created_bot = await bot_collection.find_one({"_id": result.inserted_id})
+    return bot_helper(created_bot)
 
 @app.post("/chat")
 async def chat_with_bot(req: MessageRequest):
-    bot = next((b for b in bots_db if b["id"] == req.bot_id), None)
+    try:
+        obj_id = ObjectId(req.bot_id)
+    except:
+        raise HTTPException(status_code=400, detail="Invalid Bot ID format")
+
+    bot = await bot_collection.find_one({"_id": obj_id})
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
 
-    # Si c'est notre bot de test local, on simule une réponse
+    # Mock API handling
     if bot["url"] == "mock_api":
         return {
             "reply": f"Ceci est une réponse simulée par le bot {bot['name']}. Vous avez dit : '{req.message}'"
         }
 
-    # Si c'est une vraie API (ex: OpenAI), on fait la requête HTTP
-    # C'est ici que l'agent prend le relais pour communiquer "comme un chatbot"
+    # External API Integration
     try:
         headers = {}
-        if bot["api_key"]:
+        if bot.get("api_key"):
             headers["Authorization"] = f"Bearer {bot['api_key']}"
             
         async with httpx.AsyncClient() as client:
-            # Ex: Assuming the target is an OpenAI compatible endpoint
             payload = {
                 "model": "gpt-3.5-turbo",
                 "messages": [
@@ -77,12 +75,11 @@ async def chat_with_bot(req: MessageRequest):
             response = await client.post(bot["url"], json=payload, headers=headers, timeout=10.0)
             response.raise_for_status()
             data = response.json()
-            # Try to parse standard OpenAI response format, fallback to string dump
             reply = data.get("choices", [{}])[0].get("message", {}).get("content", str(data))
             return {"reply": reply}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur de communication avec l'API externe: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur de communication API: {str(e)}")
 
 @app.get("/")
 def read_root():
-    return {"message": "SaaS Bot Builder API en ligne."}
+    return {"message": "SaaS Bot Builder API (MongoDB Mode) en ligne."}
