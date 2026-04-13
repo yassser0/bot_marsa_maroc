@@ -17,5 +17,6 @@ def bot_helper(bot) -> dict:
         "name": bot["name"],
         "url": bot["url"],
         "api_key": bot.get("api_key"),
+        "model_name": bot.get("model_name", "gpt-3.5-turbo"),
         "prompt": bot.get("prompt"),
     }

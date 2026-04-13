@@ -81,8 +81,9 @@ const BotList = ({ bots, onSelectBot, onCreateNew, loading }) => {
 const BotForm = ({ onCancel, onSave }) => {
   const [formData, setFormData] = useState({
     name: '',
-    url: 'mock_api',
+    url: 'https://api.groq.com/openai/v1/chat/completions',
     api_key: '',
+    model_name: 'llama3-8b-8192',
     prompt: ''
   });
   const [loading, setLoading] = useState(false);
@@ -139,6 +140,18 @@ const BotForm = ({ onCancel, onSave }) => {
             value={formData.api_key}
             onChange={(e) => setFormData({...formData, api_key: e.target.value})}
           />
+        </div>
+
+        <div>
+          <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: 500, color: 'var(--text-muted)' }}>Nom du modèle (Model Name)</label>
+          <input 
+            type="text" 
+            className="glass-input" 
+            placeholder="Ex: llama3-8b-8192" 
+            value={formData.model_name}
+            onChange={(e) => setFormData({...formData, model_name: e.target.value})}
+          />
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>Ex: llama3-8b-8192 (pour Groq), gpt-4o (pour OpenAI)...</span>
         </div>
 
         <div>

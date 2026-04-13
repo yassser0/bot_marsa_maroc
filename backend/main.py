@@ -21,6 +21,7 @@ class BotCreate(BaseModel):
     name: str
     url: str
     api_key: Optional[str] = None
+    model_name: Optional[str] = "gpt-3.5-turbo"
     prompt: Optional[str] = None
 
 class MessageRequest(BaseModel):
@@ -66,7 +67,7 @@ async def chat_with_bot(req: MessageRequest):
             
         async with httpx.AsyncClient() as client:
             payload = {
-                "model": "gpt-3.5-turbo",
+                "model": bot.get("model_name", "gpt-3.5-turbo"),
                 "messages": [
                     {"role": "system", "content": bot.get("prompt", "")},
                     {"role": "user", "content": req.message}
