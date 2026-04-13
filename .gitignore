@@ -1,0 +1,31 @@
+# Python (Backend)
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+venv/
+backend/data_lake/
+
+# Node (Frontend)
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/.env
+frontend/*.local
+
+# Logs and Debug
+*.log
+logs/
+npm-debug.log*
+
+# System and Editors
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Docker and Databases
+# mongo_data/ (if not using volumes properly)

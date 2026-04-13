@@ -1,10 +1,12 @@
 from fastapi import FastAPI, HTTPException, Body
+from datetime import datetime
+import time
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import httpx
 from bson import ObjectId
-from database import bot_collection, bot_helper
+from database import bot_collection, bot_helper, messages_collection, message_helper, client
 
 app = FastAPI(title="Bot Builder API", version="1.1.0")
 
@@ -16,6 +18,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+async def startup_db_client():
+    try:
+        await client.admin.command('ping')
+        print("✅ MongoDB est connecté !")
+    except Exception as e:
+        print("❌ ERREUR : Impossible de se connecter à MongoDB. Vérifiez Docker.")
 
 class BotCreate(BaseModel):
     name: str
@@ -34,6 +44,13 @@ async def get_bots():
     async for bot in bot_collection.find():
         bots.append(bot_helper(bot))
     return bots
+
+@app.get("/bots/{bot_id}/messages")
+async def get_bot_messages(bot_id: str):
+    messages = []
+    async for msg in messages_collection.find({"bot_id": bot_id}).sort("timestamp", 1):
+        messages.append(message_helper(msg))
+    return messages
 
 @app.post("/bots/")
 async def create_bot(bot: BotCreate):
@@ -59,7 +76,22 @@ async def chat_with_bot(req: MessageRequest):
             "reply": f"Ceci est une réponse simulée par le bot {bot['name']}. Vous avez dit : '{req.message}'"
         }
 
-    # External API Integration
+    # PERSISTENT MEMORY: Fetch context
+    history = []
+    async for msg in messages_collection.find({"bot_id": req.bot_id}).sort("timestamp", -1).limit(10):
+        # Backward compatibility: map 'bot' to 'assistant'
+        role = "assistant" if msg["role"] == "bot" else msg["role"]
+        history.append({"role": role, "content": msg["content"]})
+    history.reverse()
+
+    # Save User message
+    await messages_collection.insert_one({
+        "bot_id": req.bot_id,
+        "role": "user",
+        "content": req.message,
+        "timestamp": datetime.now()
+    })
+
     try:
         headers = {}
         if bot.get("api_key"):
@@ -68,27 +100,33 @@ async def chat_with_bot(req: MessageRequest):
                 api_key = f"Bearer {api_key}"
             headers["Authorization"] = api_key
             
-        async with httpx.AsyncClient() as client:
+        # Prepare context payload
+        messages_payload = [{"role": "system", "content": bot.get("prompt", "")}]
+        messages_payload.extend(history)
+        messages_payload.append({"role": "user", "content": req.message})
+
+        async with httpx.AsyncClient() as client_http:
             payload = {
                 "model": bot.get("model_name", "gpt-3.5-turbo"),
-                "messages": [
-                    {"role": "system", "content": bot.get("prompt", "")},
-                    {"role": "user", "content": req.message}
-                ]
+                "messages": messages_payload
             }
-            response = await client.post(bot["url"], json=payload, headers=headers, timeout=10.0)
+            response = await client_http.post(bot["url"], json=payload, headers=headers, timeout=15.0)
             
             if response.status_code != 200:
-                error_detail = response.text
-                try:
-                    error_detail = response.json()
-                except:
-                    pass
-                print(f"GROQ ERROR ({response.status_code}): {error_detail}")
-                raise HTTPException(status_code=response.status_code, detail=f"Erreur Groq: {error_detail}")
+                print(f"API ERROR: {response.text}")
+                raise HTTPException(status_code=response.status_code, detail="API Error")
 
             data = response.json()
             reply = data.get("choices", [{}])[0].get("message", {}).get("content", str(data))
+
+            # Save Bot reply
+            await messages_collection.insert_one({
+                "bot_id": req.bot_id,
+                "role": "assistant",
+                "content": reply,
+                "timestamp": datetime.now()
+            })
+
             return {"reply": reply}
     except Exception as e:
         print(f"DEBUG API ERROR: {str(e)}")

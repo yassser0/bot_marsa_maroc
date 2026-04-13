@@ -195,11 +195,30 @@ const BotForm = ({ onCancel, onSave }) => {
 
 // Chat Interface
 const ChatView = ({ bot, onBack }) => {
-  const [messages, setMessages] = useState([
-    { role: 'bot', content: `Bonjour ! Je suis ${bot.name}. Comment puis-je vous aider ?` }
-  ]);
+  const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+
+  // Load History from MongoDB
+  useEffect(() => {
+    const loadHistory = async () => {
+      try {
+        const response = await axios.get(`${API_BASE_URL}/bots/${bot.id}/messages`);
+        if (response.data.length > 0) {
+          setMessages(response.data);
+        } else {
+          setMessages([{ role: 'bot', content: `Bonjour ! Je suis ${bot.name}. Comment puis-je vous aider ?` }]);
+        }
+      } catch (error) {
+        console.error("Failed to load history", error);
+        setMessages([{ role: 'bot', content: "Désolé, je n'ai pas pu charger notre historique." }]);
+      } finally {
+        setInitialLoading(false);
+      }
+    };
+    loadHistory();
+  }, [bot.id, bot.name]);
 
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
@@ -242,27 +261,38 @@ const ChatView = ({ bot, onBack }) => {
       </div>
       
       <div style={{ flex: 1, padding: '24px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-        {messages.map((msg, i) => (
-          <div 
-            key={i} 
-            style={{ 
-              alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
-              background: msg.role === 'user' ? 'var(--accent-primary)' : 'var(--bg-panel)',
-              padding: '12px 16px',
-              borderRadius: msg.role === 'user' ? '16px 16px 0 16px' : '16px 16px 16px 0',
-              border: '1px solid var(--border-color)',
-              maxWidth: '80%',
-              fontSize: '15px'
-            }}
-          >
-            {msg.content}
-          </div>
-        ))}
+        {initialLoading ? (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+              <Loader2 className="animate-spin" size={32} color="var(--accent-primary)" />
+            </div>
+          ) : (
+            <>
+              {messages.map((msg, i) => (
+                <div 
+                  key={i} 
+                  className="animate-fade-in"
+                  style={{ 
+                    alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                    background: msg.role === 'user' ? 'var(--accent-primary)' : 'var(--bg-panel)',
+                    padding: '12px 16px',
+                    borderRadius: msg.role === 'user' ? '16px 16px 0 16px' : '16px 16px 16px 0',
+                    border: '1px solid var(--border-color)',
+                    maxWidth: '80%',
+                    fontSize: '15px',
+                    color: msg.role === 'user' ? 'white' : 'inherit'
+                  }}
+                >
+                  {msg.content}
+                </div>
+              ))}
+            </>
+        )}
         {loading && (
           <div style={{ alignSelf: 'flex-start', background: 'var(--bg-panel)', padding: '12px 16px', borderRadius: '16px 16px 16px 0', border: '1px solid var(--border-color)' }}>
             <Loader2 className="animate-spin" size={18} />
           </div>
         )}
+        <div ref={(el) => el && el.scrollIntoView({ behavior: 'smooth' })}></div>
       </div>
 
       <div style={{ padding: '20px', borderTop: '1px solid var(--border-color)', display: 'flex', gap: '12px' }}>
