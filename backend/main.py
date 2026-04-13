@@ -63,7 +63,10 @@ async def chat_with_bot(req: MessageRequest):
     try:
         headers = {}
         if bot.get("api_key"):
-            headers["Authorization"] = f"Bearer {bot['api_key']}"
+            api_key = bot["api_key"].strip()
+            if not api_key.startswith("Bearer "):
+                api_key = f"Bearer {api_key}"
+            headers["Authorization"] = api_key
             
         async with httpx.AsyncClient() as client:
             payload = {
@@ -74,12 +77,22 @@ async def chat_with_bot(req: MessageRequest):
                 ]
             }
             response = await client.post(bot["url"], json=payload, headers=headers, timeout=10.0)
-            response.raise_for_status()
+            
+            if response.status_code != 200:
+                error_detail = response.text
+                try:
+                    error_detail = response.json()
+                except:
+                    pass
+                print(f"GROQ ERROR ({response.status_code}): {error_detail}")
+                raise HTTPException(status_code=response.status_code, detail=f"Erreur Groq: {error_detail}")
+
             data = response.json()
             reply = data.get("choices", [{}])[0].get("message", {}).get("content", str(data))
             return {"reply": reply}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur de communication API: {str(e)}")
+        print(f"DEBUG API ERROR: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur système: {str(e)}")
 
 @app.post("/simulate-ai")
 async def simulate_ai(payload: dict = Body(...)):
@@ -100,6 +113,19 @@ async def simulate_ai(payload: dict = Body(...)):
             }
         ]
     }
+
+@app.delete("/bots/{bot_id}")
+async def delete_bot(bot_id: str):
+    try:
+        obj_id = ObjectId(bot_id)
+    except:
+        raise HTTPException(status_code=400, detail="Invalid Bot ID format")
+    
+    result = await bot_collection.delete_one({"_id": obj_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    
+    return {"message": "Bot supprimé avec succès"}
 
 @app.get("/")
 def read_root():

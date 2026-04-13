@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Bot, MessageSquare, Settings, Plus, Play, Cpu, Server, X, Send, Loader2 } from 'lucide-react';
+import { Bot, MessageSquare, Settings, Plus, Play, Cpu, Server, X, Send, Loader2, Trash2 } from 'lucide-react';
 import axios from 'axios';
 import './index.css';
 
 const API_BASE_URL = 'http://127.0.0.1:8000';
 
 // BotList Component
-const BotList = ({ bots, onSelectBot, onCreateNew, loading }) => {
+const BotList = ({ bots, onSelectBot, onCreateNew, loading, onDeleteBot }) => {
   if (loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '200px' }}>
@@ -68,6 +68,18 @@ const BotList = ({ bots, onSelectBot, onCreateNew, loading }) => {
                 >
                   <MessageSquare size={16} /> Tester
                 </button>
+                <button 
+                  className="btn-outline" 
+                  style={{ padding: '10px', color: 'var(--danger)', borderColor: 'rgba(239, 68, 68, 0.2)' }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if(confirm("Voulez-vous vraiment supprimer ce bot ?")) {
+                      onDeleteBot(bot.id);
+                    }
+                  }}
+                >
+                  <Trash2 size={16} />
+                </button>
               </div>
             </div>
           ))
@@ -83,7 +95,7 @@ const BotForm = ({ onCancel, onSave }) => {
     name: '',
     url: 'https://api.groq.com/openai/v1/chat/completions',
     api_key: '',
-    model_name: 'llama3-8b-8192',
+    model_name: 'llama-3.1-8b-instant',
     prompt: ''
   });
   const [loading, setLoading] = useState(false);
@@ -304,6 +316,15 @@ function App() {
     }
   };
 
+  const handleDeleteBot = async (botId) => {
+    try {
+      await axios.delete(`${API_BASE_URL}/bots/${botId}`);
+      await fetchBots();
+    } catch (error) {
+      alert("Erreur lors de la suppression du bot.");
+    }
+  };
+
   return (
     <div className="app-container">
       <aside className="sidebar glass-panel" style={{ margin: '16px', borderRadius: '16px' }}>
@@ -336,6 +357,7 @@ function App() {
             loading={loading}
             onSelectBot={(bot) => { setActiveBot(bot); setCurrentView('chat'); }} 
             onCreateNew={() => setCurrentView('create')} 
+            onDeleteBot={handleDeleteBot}
           />
         )}
         
