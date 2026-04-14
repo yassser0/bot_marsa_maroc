@@ -1,10 +1,9 @@
 import React from 'react';
-import { Bot, Server, Settings, Zap, ChevronRight } from 'lucide-react';
+import { Bot, Server, Zap, ChevronRight } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 const navItems = [
   { id: 'list', label: 'Mes Bots', icon: Server, description: 'Gérez vos assistants' },
-  { id: 'settings', label: 'Paramètres', icon: Settings, description: 'Configuration système' },
 ];
 
 export default function Sidebar({ currentView, setCurrentView, botsCount = 0 }) {
