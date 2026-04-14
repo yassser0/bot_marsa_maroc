@@ -104,7 +104,7 @@ async def chat_with_bot(req: MessageRequest):
             if not api_key.startswith("Bearer "):
                 api_key = f"Bearer {api_key}"
             headers["Authorization"] = api_key
-            
+
         # Prepare context payload
         messages_payload = [{"role": "system", "content": bot.get("prompt", "")}]
         messages_payload.extend(history)
@@ -115,11 +115,36 @@ async def chat_with_bot(req: MessageRequest):
                 "model": bot.get("model_name", "gpt-3.5-turbo"),
                 "messages": messages_payload
             }
-            response = await client_http.post(bot["url"], json=payload, headers=headers, timeout=15.0)
+            try:
+                response = await client_http.post(bot["url"], json=payload, headers=headers, timeout=15.0)
+            except httpx.TimeoutException:
+                raise HTTPException(status_code=504, detail="⏱️ L'API a mis trop de temps à répondre (timeout 15s). Réessayez.")
+            except httpx.ConnectError:
+                raise HTTPException(status_code=503, detail="🔌 Impossible de joindre l'API externe. Vérifiez l'URL du bot.")
+
+            if response.status_code == 401:
+                print(f"API ERROR 401: {response.text}")
+                raise HTTPException(status_code=401, detail="🔑 Clé API manquante ou invalide. Vérifiez la configuration de votre bot.")
             
+            if response.status_code == 429:
+                print(f"API ERROR 429: {response.text}")
+                # Try to extract the provider message
+                try:
+                    err_detail = response.json().get("error", {}).get("metadata", {}).get("raw", "")
+                    if not err_detail:
+                        err_detail = response.json().get("error", {}).get("message", "")
+                except Exception:
+                    err_detail = ""
+                detail_msg = f"⚡ Limite de requêtes atteinte (rate limit). {err_detail or 'Réessayez dans quelques secondes ou changez de modèle.'}"
+                raise HTTPException(status_code=429, detail=detail_msg)
+
             if response.status_code != 200:
-                print(f"API ERROR: {response.text}")
-                raise HTTPException(status_code=response.status_code, detail="API Error")
+                print(f"API ERROR {response.status_code}: {response.text}")
+                try:
+                    err_msg = response.json().get("error", {}).get("message", response.text)
+                except Exception:
+                    err_msg = response.text
+                raise HTTPException(status_code=response.status_code, detail=f"❌ Erreur API ({response.status_code}): {err_msg}")
 
             data = response.json()
             reply = data.get("choices", [{}])[0].get("message", {}).get("content", str(data))
@@ -133,9 +158,12 @@ async def chat_with_bot(req: MessageRequest):
             })
 
             return {"reply": reply}
+
+    except HTTPException:
+        raise  # re-raise clean HTTP errors as-is
     except Exception as e:
         print(f"DEBUG API ERROR: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erreur système: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"🚨 Erreur système inattendue: {str(e)}")
 
 @app.post("/simulate-ai")
 async def simulate_ai(payload: dict = Body(...)):

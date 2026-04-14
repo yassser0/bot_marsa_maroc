@@ -120,13 +120,27 @@ export default function ChatView({ bot, onBack }) {
         timestamp: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, botMsg]);
-    } catch {
-      toast.error("Erreur de communication avec l'API bot.");
+    } catch (err) {
+      // Extract the real error message from the backend
+      const detail = err?.response?.data?.detail || "Erreur de communication avec l'API bot.";
+      const status = err?.response?.status;
+
+      // Show toast with real message
+      toast.error(detail, { duration: 6000 });
+
+      // Show error bubble in chat too
+      let chatMsg = detail;
+      if (status === 401) chatMsg = '🔑 Clé API manquante ou invalide. Vérifiez la configuration de votre bot.';
+      if (status === 429) chatMsg = '⚡ Limite de requêtes atteinte. Réessayez dans quelques secondes ou changez de modèle.';
+      if (status === 504) chatMsg = "⏱️ L'API a mis trop de temps à répondre. Réessayez.";
+      if (status === 503) chatMsg = '🔌 Impossible de joindre l\'API externe. Vérifiez l\'URL du bot.';
+
       setMessages((prev) => [
         ...prev,
         {
           role: 'bot',
-          content: "⚠️ Désolé, j'ai rencontré une erreur. Veuillez réessayer.",
+          content: chatMsg,
+          isError: true,
           timestamp: new Date().toISOString(),
         },
       ]);
@@ -206,7 +220,7 @@ export default function ChatView({ bot, onBack }) {
                     <Bot size={14} />
                   </div>
                 )}
-                <div className={`chat-bubble chat-bubble--${msg.role}`}>
+                <div className={`chat-bubble chat-bubble--${msg.role}${msg.isError ? ' chat-bubble--error' : ''}`}>
                   <p>{msg.content}</p>
                   {msg.timestamp && (
                     <span className="chat-bubble-time">
