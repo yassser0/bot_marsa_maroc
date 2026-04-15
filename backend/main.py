@@ -27,12 +27,19 @@ async def startup_db_client():
     except Exception as e:
         print("❌ ERREUR : Impossible de se connecter à MongoDB. Vérifiez Docker.")
 
+class ToolConfig(BaseModel):
+    name: str
+    description: str
+    url: str
+    method: str = "GET"
+
 class BotCreate(BaseModel):
     name: str
     url: str
     api_key: Optional[str] = None
     model_name: Optional[str] = "gpt-3.5-turbo"
     prompt: Optional[str] = None
+    tools: Optional[List[ToolConfig]] = []
 
 class MessageRequest(BaseModel):
     bot_id: str  # Updated to str for MongoDB ObjectId
@@ -98,6 +105,30 @@ async def chat_with_bot(req: MessageRequest):
     })
 
     try:
+        # --- GENERIC MULTI-TOOLS DEFINITION ---
+        bot_tools_config = bot.get("tools", [])
+        llm_tools = None
+        if bot_tools_config:
+            llm_tools = []
+            for t in bot_tools_config:
+                llm_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": t.get("name", "tool"),
+                        "description": t.get("description", ""),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "L'argument de recherche ou l'ID"
+                                }
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                })
+
         headers = {}
         if bot.get("api_key"):
             api_key = bot["api_key"].strip()
@@ -105,51 +136,91 @@ async def chat_with_bot(req: MessageRequest):
                 api_key = f"Bearer {api_key}"
             headers["Authorization"] = api_key
 
-        # Prepare context payload
         messages_payload = [{"role": "system", "content": bot.get("prompt", "")}]
         messages_payload.extend(history)
         messages_payload.append({"role": "user", "content": req.message})
 
         async with httpx.AsyncClient() as client_http:
-            payload = {
+            # 1. Call LLM
+            req_payload = {
                 "model": bot.get("model_name", "gpt-3.5-turbo"),
                 "messages": messages_payload
             }
-            try:
-                response = await client_http.post(bot["url"], json=payload, headers=headers, timeout=15.0)
-            except httpx.TimeoutException:
-                raise HTTPException(status_code=504, detail="⏱️ L'API a mis trop de temps à répondre (timeout 15s). Réessayez.")
-            except httpx.ConnectError:
-                raise HTTPException(status_code=503, detail="🔌 Impossible de joindre l'API externe. Vérifiez l'URL du bot.")
+            if llm_tools:
+                req_payload["tools"] = llm_tools
 
-            if response.status_code == 401:
-                print(f"API ERROR 401: {response.text}")
-                raise HTTPException(status_code=401, detail="🔑 Clé API manquante ou invalide. Vérifiez la configuration de votre bot.")
+            response = await client_http.post(bot["url"], json=req_payload, headers=headers, timeout=20.0)
+            response.raise_for_status()
+            message_obj = response.json().get("choices", [{}])[0].get("message", {})
             
-            if response.status_code == 429:
-                print(f"API ERROR 429: {response.text}")
-                # Try to extract the provider message
-                try:
-                    err_detail = response.json().get("error", {}).get("metadata", {}).get("raw", "")
-                    if not err_detail:
-                        err_detail = response.json().get("error", {}).get("message", "")
-                except Exception:
-                    err_detail = ""
-                detail_msg = f"⚡ Limite de requêtes atteinte (rate limit). {err_detail or 'Réessayez dans quelques secondes ou changez de modèle.'}"
-                raise HTTPException(status_code=429, detail=detail_msg)
+            # 2. Handle Tool Calls (Multiple Support)
+            tool_calls = message_obj.get("tool_calls")
+            if tool_calls:
+                messages_payload.append(message_obj) # Add AI's tool request to history
 
-            if response.status_code != 200:
-                print(f"API ERROR {response.status_code}: {response.text}")
-                try:
-                    err_msg = response.json().get("error", {}).get("message", response.text)
-                except Exception:
-                    err_msg = response.text
-                raise HTTPException(status_code=response.status_code, detail=f"❌ Erreur API ({response.status_code}): {err_msg}")
+                for tool_call in tool_calls:
+                    tool_name = tool_call["function"]["name"]
+                    tool_id = tool_call["id"]
+                    
+                    print(f"DEBUG: IA demande l'outil '{tool_name}' (ID: {tool_id})")
 
-            data = response.json()
-            reply = data.get("choices", [{}])[0].get("message", {}).get("content", str(data))
+                    # Find tool
+                    target_tool = next((t for t in bot_tools_config if t["name"] == tool_name), None)
+                    
+                    if target_tool:
+                        try:
+                            import json
+                            args = json.loads(tool_call["function"]["arguments"])
+                            query = args.get("query", "")
+                            
+                            t_url = target_tool["url"]
+                            if "{query}" in t_url or "{id}" in t_url:
+                                t_url = t_url.replace("{query}", query).replace("{id}", query)
+                            elif query and "?" not in t_url:
+                                t_url = f"{t_url.rstrip('/')}/{query}"
 
-            # Save Bot reply
+                            print(f"DEBUG: Appel API REST -> {t_url}")
+                            
+                            if target_tool.get("method", "GET") == "GET":
+                                t_resp = await client_http.get(t_url, timeout=10.0)
+                            else:
+                                t_resp = await client_http.post(t_url, json={"query": query}, timeout=10.0)
+                            
+                            # Truncate if too long (max 2000 chars) to avoid LLM overflow
+                            raw_res = t_resp.text
+                            tool_result = (raw_res[:2000] + "...") if len(raw_res) > 2000 else raw_res
+                            print(f"DEBUG: Réponse Reçue (Status {t_resp.status_code})")
+                        except Exception as te:
+                            tool_result = f"Erreur outil: {str(te)}"
+                            print(f"DEBUG: Erreur Outil -> {str(te)}")
+                    else:
+                        tool_result = "Outil non configuré."
+
+                    # Add each tool result to the stack
+                    messages_payload.append({
+                        "role": "tool",
+                        "tool_call_id": tool_id,
+                        "name": tool_name,
+                        "content": tool_result
+                    })
+
+                # 3. Final call to LLM after ALL tool results are added
+                print("DEBUG: Renvoi des données à l'IA pour synthèse finale...")
+                final_payload = {
+                    "model": bot.get("model_name", "gpt-3.5-turbo"),
+                    "messages": messages_payload
+                }
+                # Optional: send tolls definition again if some models require it
+                if llm_tools:
+                    final_payload["tools"] = llm_tools
+
+                final_resp = await client_http.post(bot["url"], json=final_payload, headers=headers, timeout=25.0)
+                final_resp.raise_for_status()
+                reply = final_resp.json().get("choices", [{}])[0].get("message", {}).get("content", "...")
+            else:
+                reply = message_obj.get("content", "...")
+
+            # Save reply
             await messages_collection.insert_one({
                 "bot_id": req.bot_id,
                 "role": "assistant",
@@ -159,11 +230,9 @@ async def chat_with_bot(req: MessageRequest):
 
             return {"reply": reply}
 
-    except HTTPException:
-        raise  # re-raise clean HTTP errors as-is
     except Exception as e:
-        print(f"DEBUG API ERROR: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"🚨 Erreur système inattendue: {str(e)}")
+        print(f"DEBUG CHAT ERROR: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur système: {str(e)}")
 
 @app.post("/simulate-ai")
 async def simulate_ai(payload: dict = Body(...)):
@@ -183,6 +252,36 @@ async def simulate_ai(payload: dict = Body(...)):
                 }
             }
         ]
+    }
+
+@app.get("/test/container/{container_id}")
+async def test_container_api(container_id: str):
+    """API de test pour simuler votre système d'optimisation"""
+    # Simulation de données
+    import random
+    zones = ["Zone A", "Zone B", "Terminal Nord", "Quai 2"]
+    status_list = ["Optimisé", "En attente de mouvement", "Mal placé", "Prêt pour chargement"]
+    
+    return {
+        "id": container_id,
+        "position": f"{random.choice(zones)}, Rangée {random.randint(1, 10)}",
+        "status": random.choice(status_list),
+        "score_optimisation": f"{random.randint(60, 99)}%",
+        "derniere_mise_a_jour": datetime.now().strftime("%Y-%m-%d %H:%M")
+    }
+
+@app.get("/test/port-info/{terminal_id}")
+async def test_port_info_api(terminal_id: str):
+    """API de test pour simuler le statut d'un terminal portuaire"""
+    import random
+    levels = ["Fluide", "Modéré", "Dense", "Congestionné"]
+    return {
+        "terminal": terminal_id.upper(),
+        "trafic_actuel": random.choice(levels),
+        "navires_a_quai": random.randint(0, 8),
+        "capacite_disponible": f"{random.randint(100, 5000)} TEUs",
+        "météo_portuaire": "Ciel dégagé, Vent 10 nœuds",
+        "prochain_navire": "2h 30min"
     }
 
 @app.delete("/bots/{bot_id}")

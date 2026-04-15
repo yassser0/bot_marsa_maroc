@@ -20,6 +20,7 @@ def bot_helper(bot) -> dict:
         "api_key": bot.get("api_key"),
         "model_name": bot.get("model_name", "gpt-3.5-turbo"),
         "prompt": bot.get("prompt"),
+        "tools": bot.get("tools", []), # Dynamic list of REST tools
     }
 
 # Helper for messages
