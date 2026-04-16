@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Bot, Server, Cpu, Trash2, MessageSquare, MoreVertical, ExternalLink } from 'lucide-react';
+import { Bot, Server, Cpu, Trash2, MessageSquare, Pencil, ExternalLink } from 'lucide-react';
 import { Badge } from './ui/Badge';
 import { Button } from './ui/Button';
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from './ui/Tooltip';
@@ -15,7 +15,7 @@ import {
   AlertDialogCancel,
 } from './ui/AlertDialog';
 
-export default function BotCard({ bot, onSelectBot, onDeleteBot }) {
+export default function BotCard({ bot, onSelectBot, onDeleteBot, onEditBot }) {
   const modelShort = bot.model_name?.split('-').slice(0, 2).join('-') || 'N/A';
   const promptPreview = bot.prompt
     ? bot.prompt.length > 55
@@ -76,6 +76,20 @@ export default function BotCard({ bot, onSelectBot, onDeleteBot }) {
             <MessageSquare size={15} />
             Tester
           </Button>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="bot-card-btn-edit"
+                onClick={() => onEditBot(bot)}
+              >
+                <Pencil size={15} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Modifier la configuration</TooltipContent>
+          </Tooltip>
 
           {/* Delete Confirm AlertDialog */}
           <AlertDialogRoot>

@@ -6,8 +6,9 @@ import BotCard from './BotCard';
 import BotForm from './BotForm';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/Dialog';
 
-export default function BotList({ bots, onSelectBot, onDeleteBot, onBotCreated, loading }) {
+export default function BotList({ bots, onSelectBot, onDeleteBot, onBotCreated, onBotUpdated, loading }) {
   const [createOpen, setCreateOpen] = useState(false);
+  const [editingBot, setEditingBot] = useState(null);
   const [search, setSearch] = useState('');
 
   const filtered = bots.filter(
@@ -15,6 +16,16 @@ export default function BotList({ bots, onSelectBot, onDeleteBot, onBotCreated, 
       b.name?.toLowerCase().includes(search.toLowerCase()) ||
       b.url?.toLowerCase().includes(search.toLowerCase())
   );
+
+  const handleEditClick = (bot) => {
+    setEditingBot(bot);
+    setCreateOpen(true);
+  };
+
+  const handleClose = () => {
+    setCreateOpen(false);
+    setEditingBot(null);
+  };
 
   if (loading) {
     return (
@@ -79,25 +90,33 @@ export default function BotList({ bots, onSelectBot, onDeleteBot, onBotCreated, 
               bot={bot}
               onSelectBot={onSelectBot}
               onDeleteBot={onDeleteBot}
+              onEditBot={handleEditClick}
             />
           ))}
         </div>
       )}
 
-      {/* Create Bot Dialog */}
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      {/* Create/Edit Bot Dialog */}
+      <Dialog open={createOpen} onOpenChange={(open) => !open && handleClose()}>
         <DialogContent className="dialog-content-lg">
           <DialogHeader>
-            <DialogTitle>Créer un nouveau Bot</DialogTitle>
+            <DialogTitle>{editingBot ? 'Modifier le Bot' : 'Créer un nouveau Bot'}</DialogTitle>
             <DialogDescription>
-              Configurez votre assistant IA avec une URL d'API et un prompt système.
+              {editingBot 
+                ? 'Mettez à jour la configuration et les outils de votre assistant.' 
+                : 'Configurez votre assistant IA avec une URL d\'API et un prompt système.'}
             </DialogDescription>
           </DialogHeader>
           <BotForm
-            onCancel={() => setCreateOpen(false)}
-            onSave={async (data) => {
-              await onBotCreated(data);
-              setCreateOpen(false);
+            initialData={editingBot}
+            onCancel={handleClose}
+            onSave={async (id_or_data, data) => {
+              if (editingBot) {
+                await onBotUpdated(id_or_data, data);
+              } else {
+                await onBotCreated(id_or_data);
+              }
+              handleClose();
             }}
           />
         </DialogContent>

@@ -12,16 +12,17 @@ const GROQ_MODELS = [
   'gemma2-9b-it',
 ];
 
-export default function BotForm({ onCancel, onSave }) {
+export default function BotForm({ onCancel, onSave, initialData }) {
   const [formData, setFormData] = useState({
-    name: '',
-    url: 'https://api.groq.com/openai/v1/chat/completions',
-    api_key: '',
-    model_name: 'llama-3.1-8b-instant',
-    prompt: '',
-    tools: []
+    name: initialData?.name || '',
+    url: initialData?.url || 'https://api.groq.com/openai/v1/chat/completions',
+    api_key: initialData?.api_key || '',
+    model_name: initialData?.model_name || 'llama-3.1-8b-instant',
+    prompt: initialData?.prompt || '',
+    tools: initialData?.tools || []
   });
   const [loading, setLoading] = useState(false);
+  const isEditing = !!initialData;
 
   const set = (key, val) => setFormData((prev) => ({ ...prev, [key]: val }));
 
@@ -49,10 +50,15 @@ export default function BotForm({ onCancel, onSave }) {
     }
     setLoading(true);
     try {
-      await onSave(formData);
-      toast.success(`Bot "${formData.name}" créé avec succès !`);
+      if (isEditing) {
+        await onSave(initialData.id, formData);
+        toast.success(`Bot "${formData.name}" mis à jour avec succès !`);
+      } else {
+        await onSave(formData);
+        toast.success(`Bot "${formData.name}" créé avec succès !`);
+      }
     } catch {
-      toast.error("Erreur lors de la création du bot.");
+      toast.error(`Erreur lors de la ${isEditing ? 'mise à jour' : 'création'} du bot.`);
     } finally {
       setLoading(false);
     }

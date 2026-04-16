@@ -38,6 +38,11 @@ export default function App() {
     await fetchBots();
   };
 
+  const handleUpdateBot = async (botId, botData) => {
+    await axios.put(`${API_BASE_URL}/bots/${botId}`, botData);
+    await fetchBots();
+  };
+
   const handleDeleteBot = async (botId) => {
     const toastId = toast.loading('Suppression en cours…');
     try {
@@ -97,6 +102,7 @@ export default function App() {
               }}
               onDeleteBot={handleDeleteBot}
               onBotCreated={handleCreateBot}
+              onBotUpdated={handleUpdateBot}
             />
           )}
 

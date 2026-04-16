@@ -87,6 +87,24 @@ async def create_bot(bot: BotCreate):
     created_bot = await bot_collection.find_one({"_id": result.inserted_id})
     return bot_helper(created_bot)
 
+@app.put("/bots/{bot_id}")
+async def update_bot(bot_id: str, bot_update: BotCreate):
+    """Met à jour la configuration d'un bot existant"""
+    try:
+        obj_id = ObjectId(bot_id)
+    except:
+        raise HTTPException(status_code=400, detail="Invalid Bot ID format")
+    
+    # On ne garde que les champs renseignés
+    update_data = {k: v for k, v in bot_update.dict().items() if v is not None}
+    
+    result = await bot_collection.update_one({"_id": obj_id}, {"$set": update_data})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    
+    updated_bot = await bot_collection.find_one({"_id": obj_id})
+    return bot_helper(updated_bot)
+
 @app.post("/chat")
 async def chat_with_bot(req: MessageRequest):
     try:
