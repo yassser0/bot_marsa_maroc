@@ -25,10 +25,17 @@ def bot_helper(bot) -> dict:
 
 # Helper for messages
 def message_helper(msg) -> dict:
-    return {
+    res = {
         "id": str(msg["_id"]),
         "bot_id": msg["bot_id"],
-        "role": msg["role"], # 'user' or 'assistant'
-        "content": msg["content"],
+        "role": msg["role"], # 'user', 'assistant' or 'tool'
+        "content": msg.get("content", ""),
         "timestamp": msg.get("timestamp")
     }
+    if "tool_calls" in msg:
+        res["tool_calls"] = msg["tool_calls"]
+    if "tool_call_id" in msg:
+        res["tool_call_id"] = msg["tool_call_id"]
+    if "name" in msg:
+        res["name"] = msg["name"]
+    return res

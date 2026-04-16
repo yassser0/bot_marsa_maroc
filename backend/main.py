@@ -45,6 +45,22 @@ class MessageRequest(BaseModel):
     bot_id: str  # Updated to str for MongoDB ObjectId
     message: str
 
+class UserTest(BaseModel):
+    id: Optional[str] = None
+    name: str
+    email: str
+    role: str
+    status: Optional[str] = "Active"
+
+# --- MOCK USER DATA ---
+MOCK_USERS = [
+    {"id": "1", "name": "Yassine", "email": "yassin@marsamaroc.ma", "role": "Admin", "status": "Active"},
+    {"id": "2", "name": "Ahmed", "email": "ahmed@marsamaroc.ma", "role": "Operator", "status": "Active"},
+    {"id": "3", "name": "Sara", "email": "sara@marsamaroc.ma", "role": "Logistics", "status": "Inactive"},
+    {"id": "4", "name": "Khalid", "email": "khalid@marsamaroc.ma", "role": "IT Support", "status": "Active"},
+    {"id": "5", "name": "Fatima", "email": "fatima@marsamaroc.ma", "role": "Management", "status": "Active"},
+]
+
 @app.get("/bots")
 async def get_bots():
     bots = []
@@ -90,10 +106,20 @@ async def chat_with_bot(req: MessageRequest):
 
     # PERSISTENT MEMORY: Fetch context
     history = []
-    async for msg in messages_collection.find({"bot_id": req.bot_id}).sort("timestamp", -1).limit(10):
-        # Backward compatibility: map 'bot' to 'assistant'
-        role = "assistant" if msg["role"] == "bot" else msg["role"]
-        history.append({"role": role, "content": msg["content"]})
+    async for msg in messages_collection.find({"bot_id": req.bot_id}).sort("timestamp", -1).limit(15):
+        # Map roles and include tool-calling metadata if present
+        m = {
+            "role": "assistant" if msg["role"] == "bot" else msg["role"], 
+            "content": msg.get("content", "")
+        }
+        if "tool_calls" in msg:
+            m["tool_calls"] = msg["tool_calls"]
+        if "tool_call_id" in msg:
+            m["tool_call_id"] = msg["tool_call_id"]
+        if "name" in msg:
+            m["name"] = msg["name"]
+        
+        history.append(m)
     history.reverse()
 
     # Save User message
@@ -156,7 +182,27 @@ async def chat_with_bot(req: MessageRequest):
             # 2. Handle Tool Calls (Multiple Support)
             tool_calls = message_obj.get("tool_calls")
             if tool_calls:
-                messages_payload.append(message_obj) # Add AI's tool request to history
+                # CRITICAL: Groq/OpenAI require 'content' in assistant message even if there are tool_calls
+                if "content" not in message_obj or message_obj["content"] is None:
+                    message_obj["content"] = ""
+                
+                # Strip internal fields not allowed in some strict APIs
+                cleaned_assistant_msg = {
+                    "role": "assistant",
+                    "content": message_obj["content"],
+                    "tool_calls": tool_calls
+                }
+                
+                messages_payload.append(cleaned_assistant_msg) # Add to current conversation flow
+                
+                # PERSIST: Save the assistant's intent to use tools
+                await messages_collection.insert_one({
+                    "bot_id": req.bot_id,
+                    "role": "assistant",
+                    "content": cleaned_assistant_msg["content"],
+                    "tool_calls": tool_calls,
+                    "timestamp": datetime.now()
+                })
 
                 for tool_call in tool_calls:
                     tool_name = tool_call["function"]["name"]
@@ -174,10 +220,17 @@ async def chat_with_bot(req: MessageRequest):
                             query = args.get("query", "")
                             
                             t_url = target_tool["url"]
-                            if "{query}" in t_url or "{id}" in t_url:
-                                t_url = t_url.replace("{query}", query).replace("{id}", query)
-                            elif query and "?" not in t_url:
-                                t_url = f"{t_url.rstrip('/')}/{query}"
+                            # Clean query
+                            q_val = str(query).strip()
+                            
+                            if "{query}" in t_url:
+                                t_url = t_url.replace("{query}", q_val)
+                            elif "{id}" in t_url:
+                                t_url = t_url.replace("{id}", q_val)
+                            elif q_val and q_val.lower() not in ["", "none", "all"]:
+                                # Path param support (e.g. /products/123)
+                                if not t_url.endswith(q_val):
+                                    t_url = f"{t_url.rstrip('/')}/{q_val}"
 
                             print(f"DEBUG: Appel API REST -> {t_url}")
                             
@@ -196,12 +249,23 @@ async def chat_with_bot(req: MessageRequest):
                     else:
                         tool_result = "Outil non configuré."
 
-                    # Add each tool result to the stack
-                    messages_payload.append({
+                    # Add each tool result to the stack for immediate synthesis
+                    t_result_msg = {
                         "role": "tool",
                         "tool_call_id": tool_id,
                         "name": tool_name,
                         "content": tool_result
+                    }
+                    messages_payload.append(t_result_msg)
+
+                    # PERSIST: Save the tool's response to history
+                    await messages_collection.insert_one({
+                        "bot_id": req.bot_id,
+                        "role": "tool",
+                        "tool_call_id": tool_id,
+                        "name": tool_name,
+                        "content": tool_result,
+                        "timestamp": datetime.now()
                     })
 
                 # 3. Final call to LLM after ALL tool results are added
@@ -296,6 +360,28 @@ async def delete_bot(bot_id: str):
         raise HTTPException(status_code=404, detail="Bot not found")
     
     return {"message": "Bot supprimé avec succès"}
+
+@app.get("/test/users", tags=["Test API"])
+async def get_test_users():
+    """Returns a list of mock users for testing."""
+    return MOCK_USERS
+
+@app.get("/test/users/{user_id}", tags=["Test API"])
+async def get_test_user(user_id: str):
+    """Returns a specific mock user by ID."""
+    user = next((u for u in MOCK_USERS if u["id"] == user_id), None)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+@app.post("/test/users", tags=["Test API"])
+async def create_test_user(user: UserTest):
+    """Simulates creating a user."""
+    new_user = user.dict()
+    if not new_user.get("id"):
+        import random
+        new_user["id"] = str(random.randint(100, 999))
+    return {"message": "Utilisateur créé avec succès (simulation)", "user": new_user}
 
 @app.get("/")
 def read_root():
