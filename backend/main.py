@@ -401,6 +401,23 @@ async def create_test_user(user: UserTest):
         new_user["id"] = str(random.randint(100, 999))
     return {"message": "Utilisateur créé avec succès (simulation)", "user": new_user}
 
-@app.get("/")
-def read_root():
-    return {"message": "SaaS Bot Builder API (MongoDB Mode) en ligne."}
+import os
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+# Si le dossier dist existe (ex: en prod dans le conteneur Docker unique)
+if os.path.exists("dist"):
+    app.mount("/assets", StaticFiles(directory="dist/assets"), name="assets")
+    
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        # Sert index.html pour le routing côté client (React Router, etc)
+        # Sauf s'il s'agit d'un appel direct à un fichier qui devrait exister mais qui a été manqué
+        path = os.path.join("dist", full_path)
+        if os.path.isfile(path):
+            return FileResponse(path)
+        return FileResponse("dist/index.html")
+else:
+    @app.get("/")
+    def read_root():
+        return {"message": "SaaS Bot Builder API (MongoDB Mode) en ligne."}
