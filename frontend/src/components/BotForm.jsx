@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Bot, Cpu, FileText, Loader2, Save, Plus, Trash2, Settings2 } from 'lucide-react';
+import { Bot, Cpu, FileText, Loader2, Save, Plus, Trash2, Settings2, Send } from 'lucide-react';
 import { Button } from './ui/Button';
 import { Input, Textarea, FormField } from './ui/Input';
 import toast from 'react-hot-toast';
@@ -19,7 +19,8 @@ export default function BotForm({ onCancel, onSave, initialData }) {
     api_key: initialData?.api_key || '',
     model_name: initialData?.model_name || 'llama-3.1-8b-instant',
     prompt: initialData?.prompt || '',
-    tools: initialData?.tools || []
+    tools: initialData?.tools || [],
+    telegram_token: initialData?.telegram_token || ''
   });
   const [loading, setLoading] = useState(false);
   const isEditing = !!initialData;
@@ -108,6 +109,18 @@ export default function BotForm({ onCancel, onSave, initialData }) {
 
           <FormField label="Clé API">
             <Input type="password" value={formData.api_key} onChange={(e) => set('api_key', e.target.value)} />
+          </FormField>
+
+          <FormField label="Telegram Bot Token" hint="Obtenu via @BotFather">
+            <div className="input-icon-wrapper">
+              <Send size={15} className="input-icon" />
+              <Input 
+                placeholder="123456789:ABCDEF..." 
+                value={formData.telegram_token} 
+                onChange={(e) => set('telegram_token', e.target.value)} 
+                className="input-with-icon"
+              />
+            </div>
           </FormField>
 
           {/* Tools Section */}

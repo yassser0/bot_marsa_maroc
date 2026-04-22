@@ -2,7 +2,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 
 # Database configuration
-MONGO_DETAILS = os.getenv("MONGO_URL", "mongodb://127.0.0.1:27017")
+MONGO_DETAILS = os.getenv("MONGO_URI", "mongodb://127.0.0.1:27017")
 
 client = AsyncIOMotorClient(MONGO_DETAILS)
 
@@ -21,6 +21,7 @@ def bot_helper(bot) -> dict:
         "model_name": bot.get("model_name", "gpt-3.5-turbo"),
         "prompt": bot.get("prompt"),
         "tools": bot.get("tools", []), # Dynamic list of REST tools
+        "telegram_token": bot.get("telegram_token"),
     }
 
 # Helper for messages

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Bot, Server, Cpu, Trash2, MessageSquare, Pencil, ExternalLink } from 'lucide-react';
+import { Bot, Server, Cpu, Trash2, MessageSquare, Pencil, ExternalLink, Send } from 'lucide-react';
 import { Badge } from './ui/Badge';
 import { Button } from './ui/Button';
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from './ui/Tooltip';
@@ -35,10 +35,18 @@ export default function BotCard({ bot, onSelectBot, onDeleteBot, onEditBot }) {
           </div>
           <div className="bot-card-info">
             <h3 className="bot-card-name">{bot.name}</h3>
-            <Badge variant="success">
-              <span className="badge-dot" />
-              Prêt
-            </Badge>
+            <div className="flex items-center gap-2">
+              <Badge variant="success">
+                <span className="badge-dot" />
+                Prêt
+              </Badge>
+              {bot.telegram_token && (
+                <Badge variant="info" className="bg-sky-500/10 text-sky-400 border-sky-500/20">
+                  <Send size={10} className="mr-1" />
+                  Telegram
+                </Badge>
+              )}
+            </div>
           </div>
         </div>
 

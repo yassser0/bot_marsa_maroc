@@ -7,6 +7,8 @@ from typing import List, Optional
 import httpx
 from bson import ObjectId
 from database import bot_collection, bot_helper, messages_collection, message_helper, client
+from telegram_handler import TelegramManager
+import telegram_handler
 
 app = FastAPI(title="Bot Builder API", version="1.1.0")
 
@@ -27,6 +29,15 @@ async def startup_db_client():
     except Exception as e:
         print("❌ ERREUR : Impossible de se connecter à MongoDB. Vérifiez Docker.")
 
+    # Initialisation de Telegram
+    telegram_handler.telegram_manager = TelegramManager(process_chat_message)
+    await telegram_handler.telegram_manager.start_all_bots()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    if telegram_handler.telegram_manager:
+        await telegram_handler.telegram_manager.stop_all()
+
 class ToolConfig(BaseModel):
     name: str
     description: str
@@ -40,6 +51,7 @@ class BotCreate(BaseModel):
     model_name: Optional[str] = "gpt-3.5-turbo"
     prompt: Optional[str] = None
     tools: Optional[List[ToolConfig]] = []
+    telegram_token: Optional[str] = None
 
 class MessageRequest(BaseModel):
     bot_id: str  # Updated to str for MongoDB ObjectId
@@ -84,8 +96,14 @@ async def delete_bot_messages(bot_id: str):
 async def create_bot(bot: BotCreate):
     new_bot = bot.dict()
     result = await bot_collection.insert_one(new_bot)
-    created_bot = await bot_collection.find_one({"_id": result.inserted_id})
-    return bot_helper(created_bot)
+    created_bot_doc = await bot_collection.find_one({"_id": result.inserted_id})
+    created_bot = bot_helper(created_bot_doc)
+    
+    # Démarrage auto du bot Telegram si token présent
+    if created_bot.get("telegram_token"):
+        await telegram_handler.telegram_manager.start_bot(created_bot["id"], created_bot["telegram_token"])
+        
+    return created_bot
 
 @app.put("/bots/{bot_id}")
 async def update_bot(bot_id: str, bot_update: BotCreate):
@@ -102,30 +120,38 @@ async def update_bot(bot_id: str, bot_update: BotCreate):
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Bot not found")
     
-    updated_bot = await bot_collection.find_one({"_id": obj_id})
-    return bot_helper(updated_bot)
+    updated_bot_doc = await bot_collection.find_one({"_id": obj_id})
+    updated_bot = bot_helper(updated_bot_doc)
 
-@app.post("/chat")
-async def chat_with_bot(req: MessageRequest):
+    # Gérer le cycle de vie Telegram lors de la mise à jour
+    if updated_bot.get("telegram_token"):
+        # On redémarre pour prendre en compte un éventuel nouveau token
+        await telegram_handler.telegram_manager.stop_bot(bot_id)
+        await telegram_handler.telegram_manager.start_bot(bot_id, updated_bot["telegram_token"])
+    else:
+        # Si le token a été supprimé
+        await telegram_handler.telegram_manager.stop_bot(bot_id)
+
+    return updated_bot
+
+async def process_chat_message(bot_id_str: str, message_text: str):
+    """Core logic to process a message with a specific bot, including tools and history"""
     try:
-        obj_id = ObjectId(req.bot_id)
+        obj_id = ObjectId(bot_id_str)
     except:
-        raise HTTPException(status_code=400, detail="Invalid Bot ID format")
+        return "Invalid Bot ID format"
 
     bot = await bot_collection.find_one({"_id": obj_id})
     if not bot:
-        raise HTTPException(status_code=404, detail="Bot not found")
+        return "Bot not found"
 
     # Mock API handling
     if bot["url"] == "mock_api":
-        return {
-            "reply": f"Ceci est une réponse simulée par le bot {bot['name']}. Vous avez dit : '{req.message}'"
-        }
+        return f"Ceci est une réponse simulée par le bot {bot['name']}. Vous avez dit : '{message_text}'"
 
     # PERSISTENT MEMORY: Fetch context
     history = []
-    async for msg in messages_collection.find({"bot_id": req.bot_id}).sort("timestamp", -1).limit(15):
-        # Map roles and include tool-calling metadata if present
+    async for msg in messages_collection.find({"bot_id": bot_id_str}).sort("timestamp", -1).limit(15):
         m = {
             "role": "assistant" if msg["role"] == "bot" else msg["role"], 
             "content": msg.get("content", "")
@@ -142,9 +168,9 @@ async def chat_with_bot(req: MessageRequest):
 
     # Save User message
     await messages_collection.insert_one({
-        "bot_id": req.bot_id,
+        "bot_id": bot_id_str,
         "role": "user",
-        "content": req.message,
+        "content": message_text,
         "timestamp": datetime.now()
     })
 
@@ -182,7 +208,7 @@ async def chat_with_bot(req: MessageRequest):
 
         messages_payload = [{"role": "system", "content": bot.get("prompt", "")}]
         messages_payload.extend(history)
-        messages_payload.append({"role": "user", "content": req.message})
+        messages_payload.append({"role": "user", "content": message_text})
 
         async with httpx.AsyncClient() as client_http:
             # 1. Call LLM
@@ -197,25 +223,21 @@ async def chat_with_bot(req: MessageRequest):
             response.raise_for_status()
             message_obj = response.json().get("choices", [{}])[0].get("message", {})
             
-            # 2. Handle Tool Calls (Multiple Support)
+            # 2. Handle Tool Calls
             tool_calls = message_obj.get("tool_calls")
             if tool_calls:
-                # CRITICAL: Groq/OpenAI require 'content' in assistant message even if there are tool_calls
                 if "content" not in message_obj or message_obj["content"] is None:
                     message_obj["content"] = ""
                 
-                # Strip internal fields not allowed in some strict APIs
                 cleaned_assistant_msg = {
                     "role": "assistant",
                     "content": message_obj["content"],
                     "tool_calls": tool_calls
                 }
+                messages_payload.append(cleaned_assistant_msg)
                 
-                messages_payload.append(cleaned_assistant_msg) # Add to current conversation flow
-                
-                # PERSIST: Save the assistant's intent to use tools
                 await messages_collection.insert_one({
-                    "bot_id": req.bot_id,
+                    "bot_id": bot_id_str,
                     "role": "assistant",
                     "content": cleaned_assistant_msg["content"],
                     "tool_calls": tool_calls,
@@ -225,10 +247,6 @@ async def chat_with_bot(req: MessageRequest):
                 for tool_call in tool_calls:
                     tool_name = tool_call["function"]["name"]
                     tool_id = tool_call["id"]
-                    
-                    print(f"DEBUG: IA demande l'outil '{tool_name}' (ID: {tool_id})")
-
-                    # Find tool
                     target_tool = next((t for t in bot_tools_config if t["name"] == tool_name), None)
                     
                     if target_tool:
@@ -236,9 +254,7 @@ async def chat_with_bot(req: MessageRequest):
                             import json
                             args = json.loads(tool_call["function"]["arguments"])
                             query = args.get("query", "")
-                            
                             t_url = target_tool["url"]
-                            # Clean query
                             q_val = str(query).strip()
                             
                             if "{query}" in t_url:
@@ -246,28 +262,21 @@ async def chat_with_bot(req: MessageRequest):
                             elif "{id}" in t_url:
                                 t_url = t_url.replace("{id}", q_val)
                             elif q_val and q_val.lower() not in ["", "none", "all"]:
-                                # Path param support (e.g. /products/123)
                                 if not t_url.endswith(q_val):
                                     t_url = f"{t_url.rstrip('/')}/{q_val}"
 
-                            print(f"DEBUG: Appel API REST -> {t_url}")
-                            
                             if target_tool.get("method", "GET") == "GET":
                                 t_resp = await client_http.get(t_url, timeout=10.0)
                             else:
                                 t_resp = await client_http.post(t_url, json={"query": query}, timeout=10.0)
                             
-                            # Truncate if too long (max 2000 chars) to avoid LLM overflow
                             raw_res = t_resp.text
                             tool_result = (raw_res[:2000] + "...") if len(raw_res) > 2000 else raw_res
-                            print(f"DEBUG: Réponse Reçue (Status {t_resp.status_code})")
                         except Exception as te:
                             tool_result = f"Erreur outil: {str(te)}"
-                            print(f"DEBUG: Erreur Outil -> {str(te)}")
                     else:
                         tool_result = "Outil non configuré."
 
-                    # Add each tool result to the stack for immediate synthesis
                     t_result_msg = {
                         "role": "tool",
                         "tool_call_id": tool_id,
@@ -276,9 +285,8 @@ async def chat_with_bot(req: MessageRequest):
                     }
                     messages_payload.append(t_result_msg)
 
-                    # PERSIST: Save the tool's response to history
                     await messages_collection.insert_one({
-                        "bot_id": req.bot_id,
+                        "bot_id": bot_id_str,
                         "role": "tool",
                         "tool_call_id": tool_id,
                         "name": tool_name,
@@ -286,13 +294,10 @@ async def chat_with_bot(req: MessageRequest):
                         "timestamp": datetime.now()
                     })
 
-                # 3. Final call to LLM after ALL tool results are added
-                print("DEBUG: Renvoi des données à l'IA pour synthèse finale...")
                 final_payload = {
                     "model": bot.get("model_name", "gpt-3.5-turbo"),
                     "messages": messages_payload
                 }
-                # Optional: send tolls definition again if some models require it
                 if llm_tools:
                     final_payload["tools"] = llm_tools
 
@@ -304,17 +309,24 @@ async def chat_with_bot(req: MessageRequest):
 
             # Save reply
             await messages_collection.insert_one({
-                "bot_id": req.bot_id,
+                "bot_id": bot_id_str,
                 "role": "assistant",
                 "content": reply,
                 "timestamp": datetime.now()
             })
 
-            return {"reply": reply}
+            return reply
 
     except Exception as e:
         print(f"DEBUG CHAT ERROR: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erreur système: {str(e)}")
+        return f"Erreur système: {str(e)}"
+
+@app.post("/chat")
+async def chat_with_bot(req: MessageRequest):
+    reply = await process_chat_message(req.bot_id, req.message)
+    if reply in ["Bot not found", "Invalid Bot ID format"] or reply.startswith("Erreur système:"):
+        raise HTTPException(status_code=500 if reply.startswith("Erreur") else 400, detail=reply)
+    return {"reply": reply}
 
 @app.post("/simulate-ai")
 async def simulate_ai(payload: dict = Body(...)):
@@ -376,6 +388,9 @@ async def delete_bot(bot_id: str):
     result = await bot_collection.delete_one({"_id": obj_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Bot not found")
+    
+    # Arrêter le bot Telegram s'il tournait
+    await telegram_handler.telegram_manager.stop_bot(bot_id)
     
     return {"message": "Bot supprimé avec succès"}
 
