@@ -18,8 +18,8 @@ COPY backend/ ./
 # Copier le frontend compilé depuis la première étape vers un dossier "dist" dans le backend
 COPY --from=frontend-builder /app/frontend/dist ./dist
 
-# Rendre le port 8000 accessible
-EXPOSE 8000
+# Rendre le port 8001 accessible
+EXPOSE 8001
 
 # Démarrer le backend (qui servira aussi le frontend)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]

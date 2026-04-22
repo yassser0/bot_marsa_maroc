@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 import { Button } from './ui/Button';
 import { Badge } from './ui/Badge';
 
-const API_BASE_URL = 'http://127.0.0.1:8000';
+const API_BASE_URL = 'http://127.0.0.1:8001';
 
 function StatCard({ icon: Icon, label, value, valueColor }) {
   return (
