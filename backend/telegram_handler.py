@@ -69,30 +69,48 @@ async def _poll_etl_status(client: httpx.AsyncClient) -> str:
 
             if status == "success":
                 result = status_data.get("result", {})
-                snap = result.get("snapshot_report", {})
-                arr  = result.get("arrivals_report", {})
-                gold = result.get("gold_kpis", {})
-                adv  = gold.get("advanced_analytics", {}) if gold else {}
+                snap   = result.get("snapshot_report", {})
+                arr    = result.get("arrivals_report", {})
+                gold   = result.get("gold_kpis", {})
+                adv    = gold.get("advanced_analytics", {}) if gold else {}
 
-                lines = [
-                    "✅ *Traitement ETL terminé avec succès !*\n",
-                    f"📦 *Conteneurs placés* : {result.get('total_placed', 'N/A')}",
-                    f"🏗️ *Taux d'occupation* : {result.get('yard_occupancy', 'N/A')}",
-                    f"⏱️ *Durée* : {result.get('processing_time_ms', 'N/A')} ms\n",
-                    "*📊 Rapport Snapshot :*",
-                    f"  • Reçus : {snap.get('total_received', 'N/A')}",
-                    f"  • Placés (fixe) : {snap.get('placed_fixed', 'N/A')}",
-                    f"  • Sauvetés : {snap.get('rescued', 'N/A')}",
-                    f"\n*🚢 Rapport Arrivées :*",
-                    f"  • Reçus : {arr.get('total_received', 'N/A')}",
-                    f"  • Placés (optimisé) : {arr.get('placed', 'N/A')}",
-                    f"  • Échecs : {arr.get('failed', 'N/A')}",
-                ]
-                if adv:
-                    lines += [
-                        f"\n*📈 Score d'efficacité* : {adv.get('efficiency_score', 'N/A')}%",
-                        f"*🔄 Rehandles évités* : {adv.get('rehandle_risk_count', 'N/A')}",
+                # Standard mode: snapshot has 0 fixed placements (all optimized)
+                is_standard = snap.get("placed_fixed", 0) == 0
+
+                if is_standard:
+                    # Clean minimal report for Standard mode
+                    lines = [
+                        "✅ *Traitement ETL terminé avec succès !*",
+                        f"📦 *Conteneurs placés* : {result.get('total_placed', 'N/A')}",
+                        f"🏗️ *Taux d'occupation* : {result.get('yard_occupancy', 'N/A')}",
+                        f"⏱️ *Durée* : {result.get('processing_time_ms', 'N/A')} ms",
                     ]
+                    if adv:
+                        lines += [
+                            f"📈 *Score d'efficacité* : {adv.get('efficiency_score', 'N/A')}%",
+                            f"🔄 *Rehandles évités* : {adv.get('rehandle_risk_count', 'N/A')}",
+                        ]
+                else:
+                    # Full detailed report for Hybrid mode
+                    lines = [
+                        "✅ *Traitement ETL terminé avec succès !*\n",
+                        f"📦 *Conteneurs placés* : {result.get('total_placed', 'N/A')}",
+                        f"🏗️ *Taux d'occupation* : {result.get('yard_occupancy', 'N/A')}",
+                        f"⏱️ *Durée* : {result.get('processing_time_ms', 'N/A')} ms\n",
+                        "*📸 Snapshot (terminal actuel) :*",
+                        f"  • Reçus : {snap.get('total_received', 'N/A')}",
+                        f"  • Placés (fixe) : {snap.get('placed_fixed', 'N/A')}",
+                        f"  • Redirigés optimiseur : {snap.get('rescued', 'N/A')}",
+                        f"\n*🚢 Arrivées :*",
+                        f"  • Reçus : {arr.get('total_received', 'N/A')}",
+                        f"  • Placés (optimisé) : {arr.get('placed', 'N/A')}",
+                        f"  • Échecs : {arr.get('failed', 'N/A')}",
+                    ]
+                    if adv:
+                        lines += [
+                            f"\n*📈 Score d'efficacité* : {adv.get('efficiency_score', 'N/A')}%",
+                            f"*🔄 Rehandles évités* : {adv.get('rehandle_risk_count', 'N/A')}",
+                        ]
                 return "\n".join(lines)
 
             elif status == "error":
