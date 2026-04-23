@@ -1,7 +1,9 @@
 import asyncio
 import logging
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+import io
+import httpx
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from database import bot_collection, bot_helper
 
 # Configuration du logging
@@ -11,10 +13,118 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# URL du projet d'optimisation
+OPTIMIZATION_API_URL = "http://127.0.0.1:8000"
+
+# ---------------------------------------------------------------------------
+# State management per chat
+# chat_id -> {"state": "awaiting_mode"|"awaiting_arrivals", "snapshot_bytes": bytes, "snapshot_name": str}
+# ---------------------------------------------------------------------------
+_chat_state: dict = {}
+
+
+async def _forward_standard_csv(file_bytes: bytes, filename: str) -> str:
+    """Envoie un seul CSV (mode standard) et retourne le rapport formaté."""
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        try:
+            resp = await client.post(
+                f"{OPTIMIZATION_API_URL}/containers/upload-csv",
+                files={"file": (filename, io.BytesIO(file_bytes), "text/csv")},
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            return f"❌ Erreur lors de l'envoi du fichier : {str(e)}"
+
+        return await _poll_etl_status(client)
+
+
+async def _forward_hybrid_csv(snapshot_bytes: bytes, snapshot_name: str,
+                               arrivals_bytes: bytes, arrivals_name: str) -> str:
+    """Envoie deux CSV (mode hybride) et retourne le rapport formaté."""
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        try:
+            resp = await client.post(
+                f"{OPTIMIZATION_API_URL}/containers/upload-dual-csv",
+                files={
+                    "snapshot": (snapshot_name, io.BytesIO(snapshot_bytes), "text/csv"),
+                    "arrivals": (arrivals_name, io.BytesIO(arrivals_bytes), "text/csv"),
+                },
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            return f"❌ Erreur lors de l'envoi des fichiers : {str(e)}"
+
+        return await _poll_etl_status(client)
+
+
+async def _poll_etl_status(client: httpx.AsyncClient) -> str:
+    """Polls /containers/upload-status until done, returns formatted report."""
+    max_attempts = 28  # 28 x 4s = 112 seconds max
+    for attempt in range(max_attempts):
+        await asyncio.sleep(4)
+        try:
+            status_resp = await client.get(f"{OPTIMIZATION_API_URL}/containers/upload-status")
+            status_data = status_resp.json()
+            status = status_data.get("status", "unknown")
+
+            if status == "success":
+                result = status_data.get("result", {})
+                snap = result.get("snapshot_report", {})
+                arr  = result.get("arrivals_report", {})
+                gold = result.get("gold_kpis", {})
+                adv  = gold.get("advanced_analytics", {}) if gold else {}
+
+                lines = [
+                    "✅ *Traitement ETL terminé avec succès !*\n",
+                    f"📦 *Conteneurs placés* : {result.get('total_placed', 'N/A')}",
+                    f"🏗️ *Taux d'occupation* : {result.get('yard_occupancy', 'N/A')}",
+                    f"⏱️ *Durée* : {result.get('processing_time_ms', 'N/A')} ms\n",
+                    "*📊 Rapport Snapshot :*",
+                    f"  • Reçus : {snap.get('total_received', 'N/A')}",
+                    f"  • Placés (fixe) : {snap.get('placed_fixed', 'N/A')}",
+                    f"  • Sauvetés : {snap.get('rescued', 'N/A')}",
+                    f"\n*🚢 Rapport Arrivées :*",
+                    f"  • Reçus : {arr.get('total_received', 'N/A')}",
+                    f"  • Placés (optimisé) : {arr.get('placed', 'N/A')}",
+                    f"  • Échecs : {arr.get('failed', 'N/A')}",
+                ]
+                if adv:
+                    lines += [
+                        f"\n*📈 Score d'efficacité* : {adv.get('efficiency_score', 'N/A')}%",
+                        f"*🔄 Rehandles évités* : {adv.get('rehandle_risk_count', 'N/A')}",
+                    ]
+                return "\n".join(lines)
+
+            elif status == "error":
+                return f"❌ Erreur lors du traitement : {status_data.get('message', 'Inconnue')}"
+
+            elif status == "processing":
+                logger.info(f"[CSV Poll] Tentative {attempt+1}/{max_attempts} — {status_data.get('message', '...')}")
+
+        except Exception as e:
+            logger.warning(f"[CSV Poll] Erreur de statut: {e}")
+
+    return "⏳ Le traitement prend plus de temps que prévu. Vérifiez le dashboard pour les résultats."
+
+
+# ---------------------------------------------------------------------------
+# Telegram Handlers
+# ---------------------------------------------------------------------------
+
+def _make_mode_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard to choose Standard or Hybrid mode."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📄 Standard (1 fichier)", callback_data="mode_standard"),
+            InlineKeyboardButton("🔀 Hybride (2 fichiers)", callback_data="mode_hybrid"),
+        ]
+    ])
+
+
 class TelegramManager:
     def __init__(self, process_message_func):
         self.process_message_func = process_message_func
-        self.apps = {} # bot_id -> application
+        self.apps = {}
         self._running_tasks = {}
 
     async def start_all_bots(self):
@@ -31,35 +141,139 @@ class TelegramManager:
             return
 
         try:
-            # Construction de l'application Telegram
             app = ApplicationBuilder().token(token).build()
-            
-            # Handler pour tous les messages texte
+
+            # --- Handler TEXTE ---
             async def msg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if not update.message or not update.message.text:
                     return
-                
+                chat_id = update.effective_chat.id
+                # If user types something while we are waiting for a file, cancel the flow
+                if chat_id in _chat_state:
+                    del _chat_state[chat_id]
+                    await update.message.reply_text(
+                        "❌ Flux CSV annulé. Comment puis-je vous aider ?"
+                    )
+                    return
+
                 user_msg = update.message.text
                 logger.info(f"Telegram Bot {bot_id} reçu: {user_msg}")
-                
-                # Appel de la logique centrale (LLM + Tools)
                 reply = await self.process_message_func(bot_id, user_msg)
-                
                 await update.message.reply_text(reply)
 
+            # --- Handler FICHIER ---
+            async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+                if not update.message or not update.message.document:
+                    return
+
+                chat_id = update.effective_chat.id
+                doc = update.message.document
+                filename = doc.file_name or "upload.csv"
+
+                if not filename.lower().endswith(".csv"):
+                    await update.message.reply_text(
+                        "⚠️ Seuls les fichiers `.csv` sont acceptés.\n"
+                        "Veuillez envoyer un fichier CSV valide."
+                    )
+                    return
+
+                state = _chat_state.get(chat_id, {})
+
+                # ---- STEP 2 (Hybrid): receiving the arrivals file ----
+                if state.get("state") == "awaiting_arrivals":
+                    snapshot_bytes = state["snapshot_bytes"]
+                    snapshot_name  = state["snapshot_name"]
+                    del _chat_state[chat_id]
+
+                    await update.message.reply_text(
+                        f"📂 Fichier d'*arrivées* `{filename}` reçu !\n"
+                        f"⚙️ Lancement du traitement *Hybride* (Snapshot + Arrivées)...\n"
+                        f"_(Cela peut prendre 60 à 120 secondes)_",
+                        parse_mode="Markdown"
+                    )
+                    tg_file = await context.bot.get_file(doc.file_id)
+                    arrivals_bytes = bytes(await tg_file.download_as_bytearray())
+
+                    result_msg = await _forward_hybrid_csv(
+                        snapshot_bytes, snapshot_name,
+                        arrivals_bytes, filename
+                    )
+                    await update.message.reply_text(result_msg, parse_mode="Markdown")
+                    return
+
+                # ---- STEP 1: first file received — ask mode ----
+                logger.info(f"Telegram Bot {bot_id} reçu CSV: {filename}")
+                tg_file = await context.bot.get_file(doc.file_id)
+                file_bytes = bytes(await tg_file.download_as_bytearray())
+
+                # Store the file temporarily and ask for mode
+                _chat_state[chat_id] = {
+                    "state": "awaiting_mode",
+                    "first_bytes": file_bytes,
+                    "first_name": filename,
+                }
+
+                await update.message.reply_text(
+                    f"📂 Fichier *{filename}* reçu !\n\n"
+                    f"Quel mode de traitement souhaitez-vous ?\n\n"
+                    f"• *Standard* — Ce fichier contient toutes les données (arrivées).\n"
+                    f"• *Hybride* — Ce fichier est le *Snapshot* (état actuel). "
+                    f"Vous devrez ensuite envoyer un 2ème fichier *Arrivées*.",
+                    parse_mode="Markdown",
+                    reply_markup=_make_mode_keyboard()
+                )
+
+            # --- Handler CALLBACK (boutons inline) ---
+            async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+                query = update.callback_query
+                await query.answer()
+                chat_id = query.message.chat.id
+                state = _chat_state.get(chat_id, {})
+
+                if state.get("state") != "awaiting_mode":
+                    await query.edit_message_text("⚠️ Session expirée. Veuillez renvoyer votre fichier CSV.")
+                    return
+
+                first_bytes = state["first_bytes"]
+                first_name  = state["first_name"]
+
+                if query.data == "mode_standard":
+                    del _chat_state[chat_id]
+                    await query.edit_message_text(
+                        f"✅ Mode *Standard* sélectionné.\n"
+                        f"⚙️ Traitement de `{first_name}` en cours...\n"
+                        f"_(Cela peut prendre 60 à 90 secondes)_",
+                        parse_mode="Markdown"
+                    )
+                    result_msg = await _forward_standard_csv(first_bytes, first_name)
+                    await context.bot.send_message(chat_id=chat_id, text=result_msg, parse_mode="Markdown")
+
+                elif query.data == "mode_hybrid":
+                    _chat_state[chat_id] = {
+                        "state": "awaiting_arrivals",
+                        "snapshot_bytes": first_bytes,
+                        "snapshot_name": first_name,
+                    }
+                    await query.edit_message_text(
+                        f"✅ Mode *Hybride* sélectionné.\n"
+                        f"📸 Snapshot `{first_name}` sauvegardé.\n\n"
+                        f"📤 Envoyez maintenant le fichier *Arrivées* (CSV).",
+                        parse_mode="Markdown"
+                    )
+
             app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), msg_handler))
-            
-            # Initialisation
+            app.add_handler(MessageHandler(filters.Document.ALL, file_handler))
+            app.add_handler(CallbackQueryHandler(callback_handler))
+
             await app.initialize()
             await app.start()
-            
-            # On utilise le polling en tâche de fond
-            task = asyncio.create_task(app.updater.start_polling())
-            
+            await asyncio.sleep(1)
+            task = asyncio.create_task(app.updater.start_polling(drop_pending_updates=True))
+
             self.apps[bot_id] = app
             self._running_tasks[bot_id] = task
             logger.info(f"✅ Bot Telegram {bot_id} démarré avec succès.")
-            
+
         except Exception as e:
             logger.error(f"❌ Erreur lors du démarrage du bot Telegram {bot_id}: {str(e)}")
 
@@ -70,7 +284,12 @@ class TelegramManager:
             task = self._running_tasks.get(bot_id)
             if task:
                 task.cancel()
-            await app.updater.stop()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            if app.updater.running:
+                await app.updater.stop()
             await app.stop()
             await app.shutdown()
             del self.apps[bot_id]
@@ -83,5 +302,6 @@ class TelegramManager:
         for bid in ids:
             await self.stop_bot(bid)
 
-# Instance globale (sera initialisée dans main.py)
+
+# Instance globale
 telegram_manager = None
