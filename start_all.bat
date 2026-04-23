@@ -4,7 +4,7 @@ echo    DEMARRAGE DU SAAS BOT BUILDER
 echo ==========================================
 
 echo [1/3] Lancement de MongoDB via Docker...
-docker-compose up -d
+docker-compose up -d mongodb
 
 echo [2/3] Lancement du Backend (FastAPI)...
 start cmd /k "cd backend && uvicorn main:app --reload --port 8001"
