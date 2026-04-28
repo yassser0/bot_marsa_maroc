@@ -25,7 +25,7 @@ _chat_state: dict = {}
 
 async def _forward_standard_csv(file_bytes: bytes, filename: str) -> str:
     """Envoie un seul CSV (mode standard) et retourne le rapport formaté."""
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=None) as client:
         try:
             resp = await client.post(
                 f"{OPTIMIZATION_API_URL}/containers/upload-csv",
@@ -41,7 +41,7 @@ async def _forward_standard_csv(file_bytes: bytes, filename: str) -> str:
 async def _forward_hybrid_csv(snapshot_bytes: bytes, snapshot_name: str,
                                arrivals_bytes: bytes, arrivals_name: str) -> str:
     """Envoie deux CSV (mode hybride) et retourne le rapport formaté."""
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=None) as client:
         try:
             resp = await client.post(
                 f"{OPTIMIZATION_API_URL}/containers/upload-dual-csv",
@@ -59,8 +59,9 @@ async def _forward_hybrid_csv(snapshot_bytes: bytes, snapshot_name: str,
 
 async def _poll_etl_status(client: httpx.AsyncClient) -> str:
     """Polls /containers/upload-status until done, returns formatted report."""
-    max_attempts = 28  # 28 x 4s = 112 seconds max
-    for attempt in range(max_attempts):
+    attempt = 0
+    while True:
+        attempt += 1
         await asyncio.sleep(4)
         try:
             status_resp = await client.get(f"{OPTIMIZATION_API_URL}/containers/upload-status")
@@ -117,12 +118,10 @@ async def _poll_etl_status(client: httpx.AsyncClient) -> str:
                 return f"❌ Erreur lors du traitement : {status_data.get('message', 'Inconnue')}"
 
             elif status == "processing":
-                logger.info(f"[CSV Poll] Tentative {attempt+1}/{max_attempts} — {status_data.get('message', '...')}")
+                logger.info(f"[CSV Poll] Tentative {attempt} — {status_data.get('message', '...')}")
 
         except Exception as e:
             logger.warning(f"[CSV Poll] Erreur de statut: {e}")
-
-    return "⏳ Le traitement prend plus de temps que prévu. Vérifiez le dashboard pour les résultats."
 
 
 # ---------------------------------------------------------------------------
