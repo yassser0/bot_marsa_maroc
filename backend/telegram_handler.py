@@ -278,6 +278,7 @@ class TelegramManager:
                         parse_mode="Markdown"
                     )
 
+
             app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), msg_handler))
             app.add_handler(MessageHandler(filters.Document.ALL, file_handler))
             app.add_handler(CallbackQueryHandler(callback_handler))
