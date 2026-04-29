@@ -57,6 +57,34 @@ async def _forward_hybrid_csv(snapshot_bytes: bytes, snapshot_name: str,
         return await _poll_etl_status(client)
 
 
+async def _forward_image_to_yolo(image_bytes: bytes) -> str:
+    """Envoie une image au service YOLO et retourne le matricule et l'ISO."""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            resp = await client.post(
+                "http://localhost:5000/detect",
+                files={"image": ("photo.jpg", io.BytesIO(image_bytes), "image/jpeg")},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            
+            if "error" in data:
+                return f"❌ Erreur : {data['error']}"
+            
+            id_cont = data.get("container_id") or "Non détecté"
+            iso_code = data.get("iso_code") or "Non détecté"
+            conf = data.get("confidence", 0) * 100
+            
+            return (
+                f"🔍 *Résultats de l'analyse YOLO :*\n\n"
+                f"📦 *ID Conteneur :* `{id_cont}`\n"
+                f"📏 *Code ISO :* `{iso_code}`\n"
+                f"🎯 *Confiance :* {conf:.1f}%"
+            )
+        except Exception as e:
+            return f"❌ Erreur de connexion au service YOLO : {str(e)}"
+
+
 async def _poll_etl_status(client: httpx.AsyncClient) -> str:
     """Polls /containers/upload-status until done, returns formatted report."""
     attempt = 0
@@ -279,7 +307,22 @@ class TelegramManager:
                     )
 
 
+            # --- Handler PHOTO ---
+            async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+                if not update.message or not update.message.photo:
+                    return
+                
+                await update.message.reply_text("📸 Analyse de l'image en cours...")
+                
+                photo = update.message.photo[-1]
+                tg_file = await context.bot.get_file(photo.file_id)
+                image_bytes = bytes(await tg_file.download_as_bytearray())
+                
+                result_msg = await _forward_image_to_yolo(image_bytes)
+                await update.message.reply_text(result_msg, parse_mode="Markdown")
+
             app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), msg_handler))
+            app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
             app.add_handler(MessageHandler(filters.Document.ALL, file_handler))
             app.add_handler(CallbackQueryHandler(callback_handler))
 
