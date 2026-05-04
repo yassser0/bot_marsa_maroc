@@ -103,7 +103,7 @@ async def _forward_image_to_groq(image_bytes: bytes, api_key: str) -> str:
                 "content": [
                     {
                         "type": "text", 
-                        "text": "Tu es un expert en logistique portuaire. Fais l'OCR de ce conteneur. Extrait et liste proprement : 1. Le matricule complet. 2. Le code ISO. 3. Les poids (MAX GROSS, TARE, PAYLOAD). Sois concis."
+                        "text": "Extrait uniquement le matricule du conteneur (Container ID) visible sur cette image. Le matricule est typiquement composé de 4 lettres suivies de 7 chiffres (le dernier chiffre est parfois séparé ou encadré). Renvoie UNIQUEMENT le matricule, sans aucun autre texte, sans explication et sans code ISO."
                     },
                     {
                         "type": "image_url",
@@ -126,8 +126,8 @@ async def _forward_image_to_groq(image_bytes: bytes, api_key: str) -> str:
             
             if resp.status_code == 200:
                 data = resp.json()
-                result_text = data['choices'][0]['message']['content']
-                return f"📦 **Résultat Vision (Llama-4-Scout) :**\n\n{result_text}"
+                result_text = data['choices'][0]['message']['content'].strip()
+                return f"📦 **Matricule détecté :** `{result_text}`"
             else:
                 data = resp.json()
                 error_msg = data.get('error', {}).get('message', 'Inconnue') if isinstance(data.get('error'), dict) else data.get('error')
