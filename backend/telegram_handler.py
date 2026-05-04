@@ -60,31 +60,6 @@ async def _forward_hybrid_csv(snapshot_bytes: bytes, snapshot_name: str,
         return await _poll_etl_status(client)
 
 
-async def _forward_image_to_yolo(image_bytes: bytes) -> str:
-    """Envoie une image au service YOLO et retourne le matricule détecté."""
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        try:
-            resp = await client.post(
-                "http://localhost:5000/predict",
-                files={"image": ("photo.jpg", io.BytesIO(image_bytes), "image/jpeg")},
-            )
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("success"):
-                    container_num = html.escape(str(data.get('container_number', '')))
-                    msg = (f"📦 <b>Conteneur détecté !</b>\n\n"
-                           f"🔢 Numéro : <code>{container_num}</code>\n"
-                           f"🎯 Confiance : {data['confidence']*100:.1f}%\n"
-                           f"✅ Valide : {'Oui' if data['is_valid'] else 'Non'}")
-                    return msg
-                else:
-                    return "❌ " + html.escape(data.get("message", "Aucun matricule trouvé."))
-            else:
-                return "⚠️ Erreur de communication avec le service de détection."
-        except Exception as e:
-            return f"❌ Erreur de connexion au service YOLO : {str(e)}"
-
 
 async def _forward_image_to_groq(image_bytes: bytes, api_key: str) -> str:
     """Envoie une image au modèle Vision de Groq (Llama 4 Scout) pour l'OCR."""
