@@ -18,6 +18,7 @@ export default function BotForm({ onCancel, onSave, initialData }) {
     url: initialData?.url || 'https://api.groq.com/openai/v1/chat/completions',
     api_key: initialData?.api_key || '',
     model_name: initialData?.model_name || 'llama-3.1-8b-instant',
+    vision_model_name: initialData?.vision_model_name || 'meta-llama/llama-4-scout-17b-16e-instruct',
     prompt: initialData?.prompt || '',
     tools: initialData?.tools || [],
     telegram_token: initialData?.telegram_token || ''
@@ -80,13 +81,25 @@ export default function BotForm({ onCancel, onSave, initialData }) {
             </div>
           </FormField>
 
-          <FormField label="Modèle" hint="Groq ou OpenAI">
+          <FormField label="Modèle (Texte)" hint="Pour la conversation (ex: gpt-oss-120b)">
             <div className="input-icon-wrapper">
               <Cpu size={15} className="input-icon" />
               <Input
                 placeholder="llama-3.1-8b-instant"
                 value={formData.model_name}
                 onChange={(e) => set('model_name', e.target.value)}
+                className="input-with-icon"
+              />
+            </div>
+          </FormField>
+
+          <FormField label="Modèle Vision" hint="Pour l'OCR (ex: meta-llama/llama-4-scout-17b-16e-instruct)">
+            <div className="input-icon-wrapper">
+              <Cpu size={15} className="input-icon" />
+              <Input
+                placeholder="meta-llama/llama-4-scout-17b-16e-instruct"
+                value={formData.vision_model_name}
+                onChange={(e) => set('vision_model_name', e.target.value)}
                 className="input-with-icon"
               />
             </div>

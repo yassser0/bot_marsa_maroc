@@ -49,6 +49,7 @@ class BotCreate(BaseModel):
     url: str
     api_key: Optional[str] = None
     model_name: Optional[str] = "gpt-3.5-turbo"
+    vision_model_name: Optional[str] = "meta-llama/llama-4-scout-17b-16e-instruct"
     prompt: Optional[str] = None
     tools: Optional[List[ToolConfig]] = []
     telegram_token: Optional[str] = None

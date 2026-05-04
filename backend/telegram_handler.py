@@ -61,8 +61,8 @@ async def _forward_hybrid_csv(snapshot_bytes: bytes, snapshot_name: str,
 
 
 
-async def _forward_image_to_groq(image_bytes: bytes, api_key: str) -> str:
-    """Envoie une image au modèle Vision de Groq (Llama 4 Scout) pour l'OCR."""
+async def _forward_image_to_groq(image_bytes: bytes, api_key: str, model_name: str) -> str:
+    """Envoie une image au modèle Vision pour l'OCR."""
     base64_image = base64.b64encode(image_bytes).decode('utf-8')
     
     headers = {
@@ -71,7 +71,7 @@ async def _forward_image_to_groq(image_bytes: bytes, api_key: str) -> str:
     }
     
     payload = {
-        "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+        "model": model_name,
         "messages": [
             {
                 "role": "user",
@@ -345,11 +345,12 @@ class TelegramManager:
                 tg_file = await context.bot.get_file(photo.file_id)
                 image_bytes = bytes(await tg_file.download_as_bytearray())
                 
-                # Récupérer la clé API du bot dans la base de données
+                # Récupérer la clé API et le modèle Vision du bot dans la base de données
                 bot_doc = await bot_collection.find_one({"_id": ObjectId(bot_id)})
                 if bot_doc and bot_doc.get("api_key"):
                     api_key = bot_doc["api_key"]
-                    result_msg = await _forward_image_to_groq(image_bytes, api_key)
+                    vision_model = bot_doc.get("vision_model_name", "meta-llama/llama-4-scout-17b-16e-instruct")
+                    result_msg = await _forward_image_to_groq(image_bytes, api_key, vision_model)
                 else:
                     result_msg = "❌ Erreur : Clé API Groq non configurée pour ce bot."
                 

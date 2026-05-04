@@ -19,6 +19,7 @@ def bot_helper(bot) -> dict:
         "url": bot["url"],
         "api_key": bot.get("api_key"),
         "model_name": bot.get("model_name", "gpt-3.5-turbo"),
+        "vision_model_name": bot.get("vision_model_name", "meta-llama/llama-4-scout-17b-16e-instruct"),
         "prompt": bot.get("prompt"),
         "tools": bot.get("tools", []), # Dynamic list of REST tools
         "telegram_token": bot.get("telegram_token"),
