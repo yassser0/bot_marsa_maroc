@@ -2,6 +2,7 @@ import asyncio
 import logging
 import io
 import httpx
+import html
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from database import bot_collection, bot_helper
@@ -58,29 +59,27 @@ async def _forward_hybrid_csv(snapshot_bytes: bytes, snapshot_name: str,
 
 
 async def _forward_image_to_yolo(image_bytes: bytes) -> str:
-    """Envoie une image au service YOLO et retourne le matricule et l'ISO."""
+    """Envoie une image au service YOLO et retourne le matricule détecté."""
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             resp = await client.post(
-                "http://localhost:5000/detect",
+                "http://localhost:5000/predict",
                 files={"image": ("photo.jpg", io.BytesIO(image_bytes), "image/jpeg")},
             )
-            resp.raise_for_status()
-            data = resp.json()
             
-            if "error" in data:
-                return f"❌ Erreur : {data['error']}"
-            
-            id_cont = data.get("container_id") or "Non détecté"
-            iso_code = data.get("iso_code") or "Non détecté"
-            conf = data.get("confidence", 0) * 100
-            
-            return (
-                f"🔍 *Résultats de l'analyse YOLO :*\n\n"
-                f"📦 *ID Conteneur :* `{id_cont}`\n"
-                f"📏 *Code ISO :* `{iso_code}`\n"
-                f"🎯 *Confiance :* {conf:.1f}%"
-            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("success"):
+                    container_num = html.escape(str(data.get('container_number', '')))
+                    msg = (f"📦 <b>Conteneur détecté !</b>\n\n"
+                           f"🔢 Numéro : <code>{container_num}</code>\n"
+                           f"🎯 Confiance : {data['confidence']*100:.1f}%\n"
+                           f"✅ Valide : {'Oui' if data['is_valid'] else 'Non'}")
+                    return msg
+                else:
+                    return "❌ " + html.escape(data.get("message", "Aucun matricule trouvé."))
+            else:
+                return "⚠️ Erreur de communication avec le service de détection."
         except Exception as e:
             return f"❌ Erreur de connexion au service YOLO : {str(e)}"
 
@@ -319,7 +318,7 @@ class TelegramManager:
                 image_bytes = bytes(await tg_file.download_as_bytearray())
                 
                 result_msg = await _forward_image_to_yolo(image_bytes)
-                await update.message.reply_text(result_msg, parse_mode="Markdown")
+                await update.message.reply_text(result_msg, parse_mode="HTML")
 
             app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), msg_handler))
             app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
