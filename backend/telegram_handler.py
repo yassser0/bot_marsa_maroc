@@ -3,6 +3,8 @@ import logging
 import io
 import httpx
 import html
+import base64
+from bson import ObjectId
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from database import bot_collection, bot_helper
@@ -82,6 +84,57 @@ async def _forward_image_to_yolo(image_bytes: bytes) -> str:
                 return "⚠️ Erreur de communication avec le service de détection."
         except Exception as e:
             return f"❌ Erreur de connexion au service YOLO : {str(e)}"
+
+
+async def _forward_image_to_groq(image_bytes: bytes, api_key: str) -> str:
+    """Envoie une image au modèle Vision de Groq (Llama 4 Scout) pour l'OCR."""
+    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+    
+    headers = {
+        "Authorization": f"Bearer {api_key.strip()}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text", 
+                        "text": "Tu es un expert en logistique portuaire. Fais l'OCR de ce conteneur. Extrait et liste proprement : 1. Le matricule complet. 2. Le code ISO. 3. Les poids (MAX GROSS, TARE, PAYLOAD). Sois concis."
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_image}"
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            resp = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers,
+                json=payload
+            )
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                result_text = data['choices'][0]['message']['content']
+                return f"📦 **Résultat Vision (Llama-4-Scout) :**\n\n{result_text}"
+            else:
+                data = resp.json()
+                error_msg = data.get('error', {}).get('message', 'Inconnue') if isinstance(data.get('error'), dict) else data.get('error')
+                return f"❌ Erreur API Vision : {error_msg}"
+                
+        except Exception as e:
+            return f"❌ Erreur de connexion avec l'API Vision : {str(e)}"
 
 
 async def _poll_etl_status(client: httpx.AsyncClient) -> str:
@@ -311,14 +364,25 @@ class TelegramManager:
                 if not update.message or not update.message.photo:
                     return
                 
-                await update.message.reply_text("📸 Analyse de l'image en cours...")
+                await update.message.reply_text("📸 Analyse de l'image avec Llama-4-Scout en cours...")
                 
                 photo = update.message.photo[-1]
                 tg_file = await context.bot.get_file(photo.file_id)
                 image_bytes = bytes(await tg_file.download_as_bytearray())
                 
-                result_msg = await _forward_image_to_yolo(image_bytes)
-                await update.message.reply_text(result_msg, parse_mode="HTML")
+                # Récupérer la clé API du bot dans la base de données
+                bot_doc = await bot_collection.find_one({"_id": ObjectId(bot_id)})
+                if bot_doc and bot_doc.get("api_key"):
+                    api_key = bot_doc["api_key"]
+                    result_msg = await _forward_image_to_groq(image_bytes, api_key)
+                else:
+                    result_msg = "❌ Erreur : Clé API Groq non configurée pour ce bot."
+                
+                try:
+                    await update.message.reply_text(result_msg, parse_mode="Markdown")
+                except Exception:
+                    # En cas de Markdown invalide généré par le LLM
+                    await update.message.reply_text(result_msg)
 
             app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), msg_handler))
             app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
