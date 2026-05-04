@@ -61,52 +61,138 @@ async def _forward_hybrid_csv(snapshot_bytes: bytes, snapshot_name: str,
 
 
 
+def is_valid_bic(container_id: str) -> bool:
+    """Validates a container ID according to ISO 6346"""
+    import re
+    # Remove spaces and hyphens
+    cid = re.sub(r'[^A-Z0-9]', '', container_id.upper())
+    if len(cid) != 11:
+        return False
+    
+    # Check format: 4 letters + 7 numbers
+    if not re.match(r'^[A-Z]{4}\d{7}$', cid):
+        return False
+
+    # Letter values
+    letter_values = {
+        'A': 10, 'B': 12, 'C': 13, 'D': 14, 'E': 15, 'F': 16, 'G': 17, 'H': 18, 'I': 19,
+        'J': 20, 'K': 21, 'L': 23, 'M': 24, 'N': 25, 'O': 26, 'P': 27, 'Q': 28, 'R': 29,
+        'S': 30, 'T': 31, 'U': 32, 'V': 34, 'W': 35, 'X': 36, 'Y': 37, 'Z': 38
+    }
+
+    sum_val = 0
+    for i in range(10):
+        char = cid[i]
+        val = letter_values[char] if char.isalpha() else int(char)
+        sum_val += val * (2 ** i)
+
+    check_digit = (sum_val % 11) % 10
+    return check_digit == int(cid[10])
+
+def preprocess_image(image_bytes: bytes) -> bytes:
+    """Augmente le contraste de l'image via Pillow si disponible"""
+    try:
+        from PIL import Image, ImageEnhance
+        img = Image.open(io.BytesIO(image_bytes))
+        
+        # Convert to grayscale to remove color noise
+        img = img.convert('L')
+        
+        # Increase contrast
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(1.5)
+        
+        # Increase Sharpness
+        enhancer = ImageEnhance.Sharpness(img)
+        img = enhancer.enhance(1.5)
+        
+        # Save back to bytes
+        img_byte_arr = io.BytesIO()
+        img.save(img_byte_arr, format='JPEG')
+        return img_byte_arr.getvalue()
+    except ImportError:
+        logger.warning("Pillow non installé, traitement d'image ignoré.")
+        return image_bytes
+
 async def _forward_image_to_groq(image_bytes: bytes, api_key: str, model_name: str) -> str:
-    """Envoie une image au modèle Vision pour l'OCR."""
-    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+    """Envoie une image au modèle Vision pour l'OCR avec prétraitement et validation ISO."""
+    # 1. Prétraitement de l'image (Pillow)
+    processed_bytes = preprocess_image(image_bytes)
+    base64_image = base64.b64encode(processed_bytes).decode('utf-8')
     
     headers = {
         "Authorization": f"Bearer {api_key.strip()}",
         "Content-Type": "application/json"
     }
     
-    payload = {
-        "model": model_name,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text", 
-                        "text": "Extrait uniquement le matricule du conteneur (Container ID) visible sur cette image. Le matricule est typiquement composé de 4 lettres suivies de 7 chiffres (le dernier chiffre est parfois séparé ou encadré). Renvoie UNIQUEMENT le matricule, sans aucun autre texte, sans explication et sans code ISO."
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{base64_image}"
-                        }
-                    }
-                ]
-            }
-        ]
-    }
-
+    # 2. Advanced Prompt Engineering
+    base_prompt = (
+        "Tu es un expert en logistique portuaire. Ta seule mission est d'extraire le matricule du conteneur (Container ID). "
+        "Règles strictes : "
+        "1. Le format est TOUJOURS : 4 lettres majuscules suivies de 7 chiffres. "
+        "2. Fais très attention aux confusions classiques : ne confonds pas le S et le 5, le O et le 0, le I et le 1, le Z et le 2, le B et le 8. "
+        "INTERDICTION FORMELLE DE DONNER DES EXPLICATIONS. RENVOIE UNIQUEMENT LE MATRICULE (ex: MSCU 123456 7) ET ABSOLUMENT RIEN D'AUTRE."
+    )
+    
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": base_prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+            ]
+        }
+    ]
+    
     async with httpx.AsyncClient(timeout=60.0) as client:
         try:
-            resp = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers=headers,
-                json=payload
+            # Première tentative
+            payload = {"model": model_name, "messages": messages, "temperature": 0.0}
+            resp = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
+            if resp.status_code != 200:
+                data = resp.json()
+                err = data.get('error', {}).get('message', 'Inconnue') if isinstance(data.get('error'), dict) else data.get('error')
+                return f"❌ Erreur API Vision : {err}"
+                
+            import re
+            
+            def extract_clean_id(text: str) -> str:
+                # Cherche 4 lettres suivies de 7 chiffres (avec ou sans espaces)
+                match = re.search(r'([A-Z]{4})[\s\-]*(\d{6})[\s\-]*(\d)', text.upper())
+                if match:
+                    return f"{match.group(1)} {match.group(2)} {match.group(3)}"
+                return text.strip()
+
+            raw_text = resp.json()['choices'][0]['message']['content'].strip()
+            result_text = extract_clean_id(raw_text)
+            
+            # 3. Validation ISO
+            if is_valid_bic(result_text):
+                return f"📦 **Matricule détecté :** `{result_text}`"
+            
+            # Deuxième tentative (Correction) si invalide
+            correction_prompt = (
+                f"Le matricule '{result_text}' que tu as trouvé est invalide selon l'algorithme ISO 6346. "
+                "Tu as probablement confondu un chiffre avec une lettre ou inversement (ex: 5 et S, 0 et O). "
+                "Regarde à nouveau très attentivement l'image. "
+                "INTERDICTION DE DONNER DES EXPLICATIONS. Renvoie uniquement le matricule corrigé (4 lettres, 7 chiffres)."
             )
             
-            if resp.status_code == 200:
-                data = resp.json()
-                result_text = data['choices'][0]['message']['content'].strip()
-                return f"📦 **Matricule détecté :** `{result_text}`"
-            else:
-                data = resp.json()
-                error_msg = data.get('error', {}).get('message', 'Inconnue') if isinstance(data.get('error'), dict) else data.get('error')
-                return f"❌ Erreur API Vision : {error_msg}"
+            messages.append({"role": "assistant", "content": result_text})
+            messages.append({
+                "role": "user",
+                "content": [{"type": "text", "text": correction_prompt}]
+            })
+            
+            payload = {"model": model_name, "messages": messages, "temperature": 0.0}
+            resp2 = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
+            
+            if resp2.status_code == 200:
+                raw_text2 = resp2.json()['choices'][0]['message']['content'].strip()
+                result_text2 = extract_clean_id(raw_text2)
+                return f"📦 **Matricule détecté :** `{result_text2}`"
+            
+            return f"📦 **Matricule détecté :** `{result_text}`"
                 
         except Exception as e:
             return f"❌ Erreur de connexion avec l'API Vision : {str(e)}"
@@ -339,11 +425,24 @@ class TelegramManager:
                 if not update.message or not update.message.photo:
                     return
                 
-                await update.message.reply_text("📸 Analyse de l'image avec Llama-4-Scout en cours...")
-                
+                await update.message.reply_text("📸 Analyse de l'image avec Llama-4-Scout en cours..")
                 photo = update.message.photo[-1]
-                tg_file = await context.bot.get_file(photo.file_id)
-                image_bytes = bytes(await tg_file.download_as_bytearray())
+                
+                image_bytes = None
+                for attempt in range(3):
+                    try:
+                        # Augmenter le timeout pour Telegram et ajouter un retry
+                        tg_file = await context.bot.get_file(photo.file_id, read_timeout=40, connect_timeout=40)
+                        image_bytes = bytes(await tg_file.download_as_bytearray())
+                        break
+                    except Exception as e:
+                        if attempt == 2:
+                            await update.message.reply_text(f"❌ Erreur de téléchargement depuis Telegram (Timeout). Veuillez renvoyer l'image. ({str(e)})")
+                            return
+                        await asyncio.sleep(2)
+                
+                if not image_bytes:
+                    return
                 
                 # Récupérer la clé API et le modèle Vision du bot dans la base de données
                 bot_doc = await bot_collection.find_one({"_id": ObjectId(bot_id)})
